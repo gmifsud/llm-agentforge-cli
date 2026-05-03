@@ -9,7 +9,7 @@ Every new project follows the same ritual: write a `CLAUDE.md` that respects the
 ## Layout
 
 ```
-agentforge/
+llm-agentforge-cli/
 ├── agentforge.ps1          # PowerShell entry (Win + pwsh on Linux/macOS)
 ├── agentforge.sh           # Bash entry (WSL2 / Linux / macOS)
 ├── README.md
@@ -20,12 +20,12 @@ agentforge/
 
 ## Targets
 
-| Target | Doc | Dot folder | Use case |
-|---|---|---|---|
-| `claude` | `CLAUDE.md` | `.claude/` | Claude Code CLI (default) |
-| `codex` | `AGENTS.md` | `.codex/` | OpenAI Codex CLI |
+| Target    | Doc         | Dot folder | Use case                               |
+| --------- | ----------- | ---------- | -------------------------------------- |
+| `claude`  | `CLAUDE.md` | `.claude/` | Claude Code CLI (default)              |
+| `codex`   | `AGENTS.md` | `.codex/`  | OpenAI Codex CLI                       |
 | `generic` | `AGENTS.md` | `.agents/` | Cursor, Kilo, anything AGENTS.md-aware |
-| `all` | both docs | all three | belt-and-braces |
+| `all`     | both docs   | all three  | belt-and-braces                        |
 
 In all cases, `<dot-folder>/skills` becomes a junction (Windows) or symlink (Unix) to the vault.
 
@@ -38,7 +38,7 @@ In all cases, `<dot-folder>/skills` becomes a junction (Windows) or symlink (Uni
 $profilePath = $PROFILE
 if (-not (Test-Path $profilePath)) { New-Item -ItemType File -Path $profilePath -Force | Out-Null }
 @'
-function agentforge { pwsh -NoProfile -File "C:\Repos\LLM\agentforge\agentforge.ps1" @args }
+function agentforge { pwsh -NoProfile -File "C:\Repos\LLM\llm-agentforge-cli\agentforge.ps1" @args }
 '@ | Add-Content $profilePath
 
 # Reload profile, then bootstrap a project
@@ -51,9 +51,9 @@ agentforge init -Name my-new-app -Stack "TypeScript / Vite / .NET 8"
 
 ```bash
 # One-time PATH wiring
-echo 'alias agentforge="bash /mnt/c/Repos/LLM/agentforge/agentforge.sh"' >> ~/.zshrc
+echo 'alias agentforge="bash /mnt/c/Repos/LLM/llm-agentforge-cli/agentforge.sh"' >> ~/.zshrc
 # (or ~/.bashrc; adjust path for native Linux/macOS)
-chmod +x /mnt/c/Repos/LLM/agentforge/agentforge.sh
+chmod +x /mnt/c/Repos/LLM/llm-agentforge-cli/agentforge.sh
 source ~/.zshrc
 
 cd ~/repos/my-new-app
@@ -112,19 +112,21 @@ Output:
 ## Configuration precedence
 
 Vault root resolution:
-1. `-VaultRoot` / `--vault` argument
+
+1. `-VaultRoot` /`--vault` argument
 2. `$env:AGENTFORGE_VAULT_ROOT`
-3. `C:\Repos\LLM\llm-skill-vault\skills` (Windows) or `~/repos/LLM/llm-skill-vault/skills` (Unix)
+3. `C:\Repos\LLM\llm-skill-vault\skills` (Windows) or`~/repos/LLM/llm-skill-vault/skills` (Unix)
 
 Link type resolution:
-1. `-LinkType` / `--link` argument
-2. `junction` on Windows, `symlink` on Unix
+
+1. `-LinkType` /`--link` argument
+2. `junction` on Windows,`symlink` on Unix
 
 ## Behaviour
 
-- **Idempotent.** Re-running `init` skips existing files and links unless `-Force` / `--force`.
-- **Non-destructive by default.** Will not overwrite a hand-edited `CLAUDE.md`.
-- **Dry-run.** `-DryRun` / `--dry-run` prints intended actions without filesystem mutations.
+- **Idempotent.** Re-running`init` skips existing files and links unless`-Force` /`--force`.
+- **Non-destructive by default.** Will not overwrite a hand-edited`CLAUDE.md`.
+- **Dry-run.**`-DryRun` /`--dry-run` prints intended actions without filesystem mutations.
 - **Junctions on Windows** require no admin rights. Symlinks need admin or Developer Mode.
 - **Templates are token-aware.** Render to <200 lines, contain the 95% Confidence Rule, an index-style file map, a Lessons Learned bucket, and a Decisions Log.
 
@@ -137,23 +139,24 @@ The generated `CLAUDE.md` follows the rules in `Claude_Token_Management_Strategi
 - §19 System constitution (stable decisions in Decisions Log)
 - §20 Self-evolving Lessons Learned (≤15-word bullets)
 - §4 95% confidence rule (in §2 Non-Negotiables)
-- Operational §7 cheatsheet for `/clear`, `/compact`, model selection, MCP hygiene
+- Operational §7 cheatsheet for`/clear`,`/compact`, model selection, MCP hygiene
 
 ## Extending
 
 Add a new target by:
-1. Drop a new template at `templates/<NAME>.tmpl`.
-2. Add a row to `$Targets` in `agentforge.ps1` and to `TARGET_ROWS` in `agentforge.sh`.
-3. Add it to the `Target` validate set.
+
+1. Drop a new template at`templates/<NAME>.tmpl`.
+2. Add a row to`$Targets` in`agentforge.ps1` and to`TARGET_ROWS` in`agentforge.sh`.
+3. Add it to the`Target` validate set.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `failed to create symlink` on Windows | No admin / Dev Mode | Use `-LinkType junction` (default) |
-| `vault not found` | `AGENTFORGE_VAULT_ROOT` unset and default path missing | Set the env var or pass `-VaultRoot` |
-| Re-running does nothing | Idempotency | Add `-Force` to overwrite |
-| Skills missing in WSL2 | Different filesystem mount | Pass `--vault /mnt/c/Repos/LLM/llm-skill-vault/skills` |
+| Symptom                               | Cause                                                  | Fix                                                   |
+| ------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
+| `failed to create symlink` on Windows | No admin / Dev Mode                                    | Use`-LinkType junction` (default)                     |
+| `vault not found`                     | `AGENTFORGE_VAULT_ROOT` unset and default path missing | Set the env var or pass`-VaultRoot`                   |
+| Re-running does nothing               | Idempotency                                            | Add`-Force` to overwrite                              |
+| Skills missing in WSL2                | Different filesystem mount                             | Pass`--vault /mnt/c/Repos/LLM/llm-skill-vault/skills` |
 
 ## Naming history
 
