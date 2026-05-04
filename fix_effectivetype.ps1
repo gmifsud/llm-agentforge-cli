@@ -1,0 +1,1 @@
+(Get-Content agentforge.ps1 -Raw).Replace('Write-Dry "would create $effectiveType: $linkPath -> $VaultRoot"', 'Write-Dry "would create ${effectiveType}: $linkPath -> $VaultRoot"') | Set-Content agentforge.ps1 -NoNewline

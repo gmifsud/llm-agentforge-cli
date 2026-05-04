@@ -219,7 +219,7 @@ function New-SkillsLink {
     }
 
     if ($DryRun) {
-        Write-Dry "would create $effectiveType: $linkPath -> $VaultRoot"
+        Write-Dry "would create ${effectiveType}: $linkPath -> $VaultRoot"
         return
     }
 
