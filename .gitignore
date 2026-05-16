@@ -1,0 +1,6 @@
+# Stakpak session files
+.stakpak/session*
+
+.stakpak/
+
+.vscode/

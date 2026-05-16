@@ -22,6 +22,7 @@ VAULT_ROOT="${AGENTFORGE_VAULT_ROOT:-}"
 LINK_TYPE="auto"
 DRY_RUN=0
 FORCE=0
+PRESERVE=1
 
 # ---------- target matrix ----------
 # format: key|doc|dir|template
@@ -66,7 +67,9 @@ Options:
                         or ~/repos/LLM/llm-skill-vault/skills)
   --link  TYPE          symlink | copy | none (default: symlink on Unix)
   --dry-run             Print actions without performing them
-  --force               Overwrite existing docs / replace existing link
+  --force               Overwrite existing docs; with --no-preserve, replace existing skills
+  --preserve            Preserve existing skills and merge missing incoming skills (default)
+  --no-preserve         Allow --force to replace existing skills
   -h, --help            Show this help
 
 Examples:
@@ -99,6 +102,8 @@ while [[ $# -gt 0 ]]; do
     --link)    LINK_TYPE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --force)   FORCE=1; shift ;;
+    --preserve) PRESERVE=1; shift ;;
+    --no-preserve) PRESERVE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) err "unknown arg: $1"; usage; exit 2 ;;
   esac
@@ -158,6 +163,48 @@ write_doc() {
   ok "wrote $doc"
 }
 
+merge_skills() {
+  local source_root="$1"
+  local destination_root="$2"
+  local dir="$3"
+
+  if [[ ! -d "$destination_root" ]]; then
+    err "$dir/skills exists but is not a directory; refusing to replace while --preserve is active"
+    return 1
+  fi
+
+  local added=0 skipped=0 item name dest
+  shopt -s dotglob nullglob
+  local incoming=("$source_root"/*)
+  shopt -u dotglob nullglob
+
+  for item in "${incoming[@]}"; do
+    name="$(basename "$item")"
+    dest="$destination_root/$name"
+    if [[ -e "$dest" || -L "$dest" ]]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+      dry "would copy $name into $dir/skills"
+    else
+      cp -R "$item" "$dest"
+    fi
+    added=$((added + 1))
+  done
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    dry "would preserve existing $dir/skills and merge $added missing incoming skills"
+  else
+    ok "preserved $dir/skills; merged $added incoming skills"
+  fi
+
+  if [[ $skipped -gt 0 ]]; then
+    warn "kept $skipped existing skill paths with the same names"
+  fi
+}
+
 make_link() {
   local dir="$1"
   local dot_dir="$PROJECT_PATH/$dir"
@@ -174,8 +221,12 @@ make_link() {
   fi
 
   if [[ -e "$link_path" || -L "$link_path" ]]; then
+    if [[ $PRESERVE -eq 1 ]]; then
+      merge_skills "$VAULT_ROOT" "$link_path" "$dir"
+      return 0
+    fi
     if [[ $FORCE -eq 0 ]]; then
-      warn "$dir/skills already exists — skipping (use --force)"
+      warn "$dir/skills already exists - skipping (use --force)"
       return 0
     fi
     if [[ $DRY_RUN -eq 1 ]]; then dry "would remove $link_path"

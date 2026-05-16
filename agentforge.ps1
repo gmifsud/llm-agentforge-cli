@@ -39,13 +39,25 @@
   Print actions without performing them.
 
 .PARAMETER Force
-  Overwrite existing CLAUDE.md / AGENTS.md and replace existing skills link.
+  Overwrite existing CLAUDE.md / AGENTS.md and, with -NoPreserve, replace existing skills.
+
+.PARAMETER Preserve
+  Preserve existing skills and merge missing incoming skills from the vault.
+
+.PARAMETER NoPreserve
+  Allow -Force to replace existing skills instead of merging them.
 
 .EXAMPLE
   pwsh agentforge.ps1 init -Path C:\Repos\LLM\my-new-app -Name my-new-app -Stack "TypeScript / Vite"
 
 .EXAMPLE
   pwsh agentforge.ps1 init -Target all -DryRun
+
+.EXAMPLE
+  pwsh agentforge.ps1 link -Target claude
+
+.EXAMPLE
+  pwsh agentforge.ps1 link -Target claude -NoPreserve -Force
 
 .EXAMPLE
   pwsh agentforge.ps1 doctor -Path .
@@ -74,7 +86,9 @@ param(
     [string]$LinkType = 'auto',
 
     [switch]$DryRun,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Preserve = $true,
+    [switch]$NoPreserve
 )
 
 # ---------- platform helpers ----------
@@ -106,6 +120,10 @@ if (-not $VaultRoot) {
 
 if ($LinkType -eq 'auto') {
     $LinkType = if ($Script:OnWindows) { 'junction' } else { 'symlink' }
+}
+
+if ($NoPreserve) {
+    $Preserve = $false
 }
 
 # ---------- target matrix ----------
@@ -197,8 +215,12 @@ function New-SkillsLink {
     }
 
     if (Test-Path -LiteralPath $linkPath) {
+        if ($Preserve) {
+            Merge-Skills -SourceRoot $VaultRoot -DestinationRoot $linkPath -TargetDir $TargetCfg.Dir
+            return
+        }
         if (-not $Force) {
-            Write-Warn2 "$($TargetCfg.Dir)/skills already exists — skipping (use -Force to replace)"
+            Write-Warn2 "$($TargetCfg.Dir)/skills already exists - skipping (use -Force to replace)"
             return
         }
         if ($DryRun) { Write-Dry "would remove existing $linkPath" }
@@ -246,6 +268,48 @@ function New-SkillsLink {
         if ($effectiveType -eq 'symlink' -and $Script:OnWindows) {
             Write-Warn2 "Symlinks on Windows need admin or Developer Mode. Use -LinkType junction instead."
         }
+    }
+}
+
+function Merge-Skills {
+    param(
+        [string]$SourceRoot,
+        [string]$DestinationRoot,
+        [string]$TargetDir
+    )
+
+    if (-not (Test-Path -LiteralPath $DestinationRoot -PathType Container)) {
+        Write-Err2 "$TargetDir/skills exists but is not a directory; refusing to replace while -Preserve is active"
+        return
+    }
+
+    $added = 0
+    $skipped = 0
+    $incoming = Get-ChildItem -LiteralPath $SourceRoot -Force -ErrorAction SilentlyContinue
+
+    foreach ($item in $incoming) {
+        $dest = Join-Path $DestinationRoot $item.Name
+        if (Test-Path -LiteralPath $dest) {
+            $skipped++
+            continue
+        }
+
+        if ($DryRun) {
+            Write-Dry "would copy $($item.Name) into $TargetDir/skills"
+        } else {
+            Copy-Item -LiteralPath $item.FullName -Destination $dest -Recurse -Force
+        }
+        $added++
+    }
+
+    if ($DryRun) {
+        Write-Dry "would preserve existing $TargetDir/skills and merge $added missing incoming skills"
+    } else {
+        Write-Ok "preserved $TargetDir/skills; merged $added incoming skills"
+    }
+
+    if ($skipped -gt 0) {
+        Write-Warn2 "kept $skipped existing skill paths with the same names"
     }
 }
 

@@ -27,7 +27,7 @@ llm-agentforge-cli/
 | `generic` | `AGENTS.md` | `.agents/` | Cursor, Kilo, anything AGENTS.md-aware |
 | `all`     | both docs   | all three  | belt-and-braces                        |
 
-In all cases, `<dot-folder>/skills` becomes a junction (Windows) or symlink (Unix) to the vault.
+When no skills folder exists, `<dot-folder>/skills` becomes a junction (Windows) or symlink (Unix) to the vault. When a repo already has skills, `agentforge` preserves them by default and copies in only missing skills from the vault.
 
 ## Quick start
 
@@ -81,12 +81,24 @@ agentforge.sh init \
   --stack "TypeScript / Vite / .NET 8"
 ```
 
-### `link` — re-create the skills link only
+### `link` — create or merge the skills folder
 
-Useful when the vault path moves or you renamed the dot folder.
+Useful when the vault path moves, you renamed the dot folder, or you want to merge shared vault skills into a repo that already has local skills.
 
 ```powershell
-agentforge link -Target claude -Force
+agentforge link -Target claude
+```
+
+By default, existing repo skills are preserved. Incoming vault skills are copied only when their skill path does not already exist.
+
+To replace an existing skills folder instead of preserving it, opt out of preservation and force replacement:
+
+```powershell
+agentforge link -Target claude -NoPreserve -Force
+```
+
+```bash
+agentforge.sh link --target claude --no-preserve --force
 ```
 
 ### `doctor` — diagnose
@@ -122,10 +134,17 @@ Link type resolution:
 1. `-LinkType` /`--link` argument
 2. `junction` on Windows,`symlink` on Unix
 
+Skills preservation:
+
+1. `-Preserve` /`--preserve` is enabled by default
+2. Existing repo skill paths win over same-name incoming vault paths
+3. Use `-NoPreserve -Force` /`--no-preserve --force` to replace an existing skills folder
+
 ## Behaviour
 
-- **Idempotent.** Re-running`init` skips existing files and links unless`-Force` /`--force`.
+- **Idempotent.** Re-running`init` skips existing docs unless`-Force` /`--force`; existing skills are preserved and merged by default.
 - **Non-destructive by default.** Will not overwrite a hand-edited`CLAUDE.md`.
+- **Preserves local skills.** Existing repo skills are kept; missing incoming vault skills are copied in.
 - **Dry-run.**`-DryRun` /`--dry-run` prints intended actions without filesystem mutations.
 - **Junctions on Windows** require no admin rights. Symlinks need admin or Developer Mode.
 - **Templates are token-aware.** Render to <200 lines, contain the 95% Confidence Rule, an index-style file map, a Lessons Learned bucket, and a Decisions Log.
@@ -155,7 +174,7 @@ Add a new target by:
 | ------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- |
 | `failed to create symlink` on Windows | No admin / Dev Mode                                    | Use`-LinkType junction` (default)                     |
 | `vault not found`                     | `AGENTFORGE_VAULT_ROOT` unset and default path missing | Set the env var or pass`-VaultRoot`                   |
-| Re-running does nothing               | Idempotency                                            | Add`-Force` to overwrite                              |
+| Re-running keeps local skills         | Preserve mode is the default                           | Use`-NoPreserve -Force` /`--no-preserve --force` to replace |
 | Skills missing in WSL2                | Different filesystem mount                             | Pass`--vault /mnt/c/Repos/LLM/llm-skill-vault/skills` |
 
 ## Naming history
