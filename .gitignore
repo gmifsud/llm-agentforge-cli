@@ -4,3 +4,6 @@
 .stakpak/
 
 .vscode/
+
+# Generated skill archives
+archives/
