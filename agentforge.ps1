@@ -70,7 +70,7 @@ param(
 
     [string]$Path,
 
-    [ValidateSet('claude', 'codex', 'generic', 'all')]
+    [ValidateSet('claude', 'codex', 'generic', 'gemini', 'all')]
     [string]$Target = 'claude',
 
     [string]$Name,
@@ -140,6 +140,7 @@ $Targets = @{
     claude  = @{ Doc = 'CLAUDE.md';  Dir = '.claude';  Tmpl = 'CLAUDE.md.tmpl' }
     codex   = @{ Doc = 'AGENTS.md';  Dir = '.codex';   Tmpl = 'AGENTS.md.tmpl' }
     generic = @{ Doc = 'AGENTS.md';  Dir = '.agents';  Tmpl = 'AGENTS.md.tmpl' }
+    gemini  = @{ Doc = 'GEMINI.md';  Dir = '.gemini';  Tmpl = 'GEMINI.md.tmpl' }
 }
 
 function Get-TargetSet {
@@ -322,6 +323,64 @@ function Merge-Skills {
     }
 }
 
+function Update-GitIgnore {
+    param(
+        [string]$ProjectRoot,
+        [string]$DocName,
+        [string]$DirName
+    )
+    $ignoreFile = Join-Path $ProjectRoot '.gitignore'
+    $entriesToAdd = [System.Collections.Generic.List[string]]::new()
+    
+    $existingLines = @()
+    if (Test-Path -LiteralPath $ignoreFile) {
+        $existingLines = Get-Content -LiteralPath $ignoreFile
+    }
+    
+    $existingTrimmed = $existingLines | ForEach-Object { $_.Trim() }
+
+    if ($existingTrimmed -notcontains $DocName) {
+        $entriesToAdd.Add($DocName)
+    }
+
+    $dirPattern = "$DirName/"
+    if ($existingTrimmed -notcontains $dirPattern) {
+        $entriesToAdd.Add($dirPattern)
+    }
+
+    if ($entriesToAdd.Count -gt 0) {
+        if ($DryRun) {
+            Write-Dry "would append to .gitignore: $($entriesToAdd -join ', ')"
+            return
+        }
+        
+        $needsLeadingNewline = $false
+        if (Test-Path -LiteralPath $ignoreFile) {
+            $rawContent = Get-Content -LiteralPath $ignoreFile -Raw
+            if ($rawContent -and -not $rawContent.EndsWith("`n") -and -not $rawContent.EndsWith("`r")) {
+                $needsLeadingNewline = $true
+            }
+        }
+
+        $ignoreContent = ""
+        if ($needsLeadingNewline) {
+            $ignoreContent += "`r`n"
+        }
+        
+        $hasAgentForgeComment = $existingTrimmed -contains "# agentforge generated"
+        if (-not $hasAgentForgeComment) {
+            $ignoreContent += "# agentforge generated`r`n"
+        }
+        
+        foreach ($entry in $entriesToAdd) {
+            $ignoreContent += "$entry`r`n"
+        }
+        
+        Add-Content -LiteralPath $ignoreFile -Value $ignoreContent -Encoding UTF8
+        Write-Ok "updated .gitignore with ignored paths"
+    }
+}
+
 function Invoke-Init {
     Write-Step "agentforge init"
     Write-Host "  Project : $Name ($Path)"
@@ -341,6 +400,7 @@ function Invoke-Init {
         $cfg = $Targets[$t]
         New-AgentDoc    -ProjectRoot $Path -TargetCfg $cfg
         New-SkillsLink  -ProjectRoot $Path -TargetCfg $cfg
+        Update-GitIgnore -ProjectRoot $Path -DocName $cfg.Doc -DirName $cfg.Dir
     }
 }
 
@@ -348,7 +408,9 @@ function Invoke-Link {
     Write-Step "agentforge link"
     foreach ($t in (Get-TargetSet $Target)) {
         Write-Step "target: $t"
-        New-SkillsLink -ProjectRoot $Path -TargetCfg $Targets[$t]
+        $cfg = $Targets[$t]
+        New-SkillsLink -ProjectRoot $Path -TargetCfg $cfg
+        Update-GitIgnore -ProjectRoot $Path -DocName $cfg.Doc -DirName $cfg.Dir
     }
 }
 

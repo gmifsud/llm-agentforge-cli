@@ -30,6 +30,7 @@ TARGET_ROWS=(
   "claude|CLAUDE.md|.claude|CLAUDE.md.tmpl"
   "codex|AGENTS.md|.codex|AGENTS.md.tmpl"
   "generic|AGENTS.md|.agents|AGENTS.md.tmpl"
+  "gemini|GEMINI.md|.gemini|GEMINI.md.tmpl"
 )
 
 # ---------- logging ----------
@@ -56,7 +57,7 @@ Commands:
 
 Options:
   --path PATH           Project root (default: cwd)
-  --target T            claude | codex | generic | all  (default: claude)
+  --target T            claude | codex | generic | gemini | all  (default: claude)
   --name NAME           Project name (default: leaf folder)
   --stack "TXT"         Tech-stack one-liner
   --owner NAME          Owner (default: $USER)
@@ -134,7 +135,7 @@ fi
 get_targets() {
   case "$TARGET" in
     all)    printf '%s\n' "${TARGET_ROWS[@]}" ;;
-    claude|codex|generic)
+    claude|codex|generic|gemini)
             printf '%s\n' "${TARGET_ROWS[@]}" | grep "^${TARGET}|" ;;
     *)      err "invalid --target: $TARGET"; exit 2 ;;
   esac
@@ -260,6 +261,54 @@ make_link() {
   ok "linked $dir/skills ($LINK_TYPE) -> $VAULT_ROOT"
 }
 
+update_gitignore() {
+  local doc="$1"
+  local dir="$2"
+  local ignore_file="$PROJECT_PATH/.gitignore"
+  local entries_to_add=()
+
+  # Check if .gitignore exists
+  local existing_content=""
+  if [[ -f "$ignore_file" ]]; then
+    existing_content="$(cat "$ignore_file")"
+  fi
+
+  # Check if doc is ignored
+  if ! echo "$existing_content" | grep -qxF "$doc" >/dev/null 2>&1; then
+    entries_to_add+=("$doc")
+  fi
+
+  # Check if dir/ is ignored
+  if ! echo "$existing_content" | grep -qxF "$dir/" >/dev/null 2>&1; then
+    entries_to_add+=("$dir/")
+  fi
+
+  if [[ ${#entries_to_add[@]} -gt 0 ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      dry "would append to .gitignore: ${entries_to_add[*]}"
+      return 0
+    fi
+
+    # Ensure .gitignore has a trailing newline if it exists and isn't empty
+    if [[ -f "$ignore_file" && -s "$ignore_file" ]]; then
+      local last_char; last_char=$(tail -c 1 "$ignore_file")
+      if [[ "$last_char" != $'\n' ]]; then
+        echo "" >> "$ignore_file"
+      fi
+    fi
+
+    # Check if agentforge comment exists
+    if ! echo "$existing_content" | grep -qxF "# agentforge generated" >/dev/null 2>&1; then
+      echo "# agentforge generated" >> "$ignore_file"
+    fi
+
+    for entry in "${entries_to_add[@]}"; do
+      echo "$entry" >> "$ignore_file"
+    done
+    ok "updated .gitignore with ignored paths"
+  fi
+}
+
 # ---------- commands ----------
 cmd_init() {
   step "agentforge init"
@@ -280,6 +329,7 @@ cmd_init() {
     step "target: $key"
     write_doc "$doc" "$tmpl"
     make_link "$dir"
+    update_gitignore "$doc" "$dir"
   done < <(get_targets)
 }
 
@@ -289,6 +339,7 @@ cmd_link() {
     [[ -z "$key" ]] && continue
     step "target: $key"
     make_link "$dir"
+    update_gitignore "$doc" "$dir"
   done < <(get_targets)
 }
 
