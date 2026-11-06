@@ -83,10 +83,17 @@ EOF
 if [[ $# -eq 0 ]]; then usage; exit 0; fi
 COMMAND="$1"; shift || true
 case "$COMMAND" in
-  init|link|doctor) ;;
+  init|link|doctor|repo) ;;
   help|-h|--help) usage; exit 0 ;;
   *) err "unknown command: $COMMAND"; usage; exit 2 ;;
 esac
+
+# For 'repo' command, pass all remaining args directly to repo.js
+REPO_ARGS=()
+if [[ "$COMMAND" == "repo" ]]; then
+  REPO_ARGS=("$@")
+  set --
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -113,7 +120,13 @@ done
 [[ -z "$PROJECT_PATH" ]] && PROJECT_PATH="$(pwd)"
 [[ -z "$NAME" ]] && NAME="$(basename "$PROJECT_PATH")"
 if [[ -z "$VAULT_ROOT" ]]; then
-  VAULT_ROOT="$HOME/repos/LLM/llm-skill-vault/skills"
+  # Check for merged-skills directory (created by agentforge repo sync)
+  MERGED_SKILLS="$HOME/.agentforge/merged-skills"
+  if [[ -d "$MERGED_SKILLS" ]]; then
+    VAULT_ROOT="$MERGED_SKILLS"
+  else
+    VAULT_ROOT="$HOME/repos/LLM/llm-skill-vault/skills"
+  fi
 fi
 [[ "$LINK_TYPE" == "auto" ]] && LINK_TYPE="symlink"
 
@@ -306,8 +319,19 @@ cmd_doctor() {
   done
 }
 
+cmd_repo() {
+  # Delegate to Node.js repo.js script
+  local repo_script="$SCRIPT_DIR/repo.js"
+  if [[ ! -f "$repo_script" ]]; then
+    err "repo.js not found at $repo_script"
+    exit 1
+  fi
+  node "$repo_script" "${REPO_ARGS[@]}"
+}
+
 case "$COMMAND" in
   init)   cmd_init ;;
   link)   cmd_link ;;
   doctor) cmd_doctor ;;
+  repo)   cmd_repo "$@" ;;
 esac

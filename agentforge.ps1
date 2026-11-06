@@ -65,7 +65,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('init', 'link', 'doctor', 'help')]
+    [ValidateSet('init', 'link', 'doctor', 'repo', 'help')]
     [string]$Command = 'help',
 
     [string]$Path,
@@ -88,7 +88,10 @@ param(
     [switch]$DryRun,
     [switch]$Force,
     [switch]$Preserve = $true,
-    [switch]$NoPreserve
+    [switch]$NoPreserve,
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RepoArgs
 )
 
 # ---------- platform helpers ----------
@@ -111,10 +114,16 @@ if (-not $Name) { $Name = Split-Path -Leaf $Path }
 if (-not $VaultRoot) {
     if ($env:AGENTFORGE_VAULT_ROOT) {
         $VaultRoot = $env:AGENTFORGE_VAULT_ROOT
-    } elseif ($Script:OnWindows) {
-        $VaultRoot = 'C:\Repos\LLM\llm-skill-vault\skills'
     } else {
-        $VaultRoot = (Join-Path $HOME 'repos/LLM/llm-skill-vault/skills')
+        # Check for merged-skills directory (created by agentforge repo sync)
+        $mergedSkills = Join-Path $HOME '.agentforge' 'merged-skills'
+        if (Test-Path -LiteralPath $mergedSkills -PathType Container) {
+            $VaultRoot = $mergedSkills
+        } elseif ($Script:OnWindows) {
+            $VaultRoot = 'C:\Repos\LLM\llm-skill-vault\skills'
+        } else {
+            $VaultRoot = (Join-Path $HOME 'repos/LLM/llm-skill-vault/skills')
+        }
     }
 }
 
@@ -377,6 +386,39 @@ function Invoke-Doctor {
     }
 }
 
+function Invoke-Repo {
+    # Delegate to Node.js repo.js script
+    $repoScript = Join-Path $Script:ScriptDir 'repo.js'
+    if (-not (Test-Path -LiteralPath $repoScript)) {
+        Write-Err2 "repo.js not found at $repoScript"
+        return
+    }
+
+    # Extract raw arguments directly from System.Environment.GetCommandLineArgs
+    # to bypass PowerShell param binding for subcommand arguments (like --name, --force)
+    $rawArgs = [System.Environment]::GetCommandLineArgs()
+    $scriptIdx = -1
+    for ($i = 0; $i -lt $rawArgs.Count; $i++) {
+        if ($rawArgs[$i] -like "*agentforge.ps1" -or $rawArgs[$i] -eq $PSCommandPath) {
+            $scriptIdx = $i
+            break
+        }
+    }
+
+    if ($scriptIdx -ne -1 -and ($scriptIdx + 1) -lt $rawArgs.Count) {
+        # Skip the script path and the command 'repo'
+        $repoCommandArgs = $rawArgs[($scriptIdx + 2)..($rawArgs.Count - 1)]
+    } else {
+        $repoCommandArgs = @()
+    }
+
+    if ($repoCommandArgs.Count -eq 0) {
+        & node $repoScript
+    } else {
+        & node $repoScript $repoCommandArgs
+    }
+}
+
 function Show-Help {
     Get-Help $PSCommandPath -Detailed | Out-String | Write-Host
 }
@@ -386,5 +428,6 @@ switch ($Command) {
     'init'   { Invoke-Init }
     'link'   { Invoke-Link }
     'doctor' { Invoke-Doctor }
+    'repo'   { Invoke-Repo }
     'help'   { Show-Help }
 }

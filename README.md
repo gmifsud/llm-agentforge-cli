@@ -121,13 +121,61 @@ Output:
   generic   doc:·  link:·
 ```
 
+### `repo` — manage external skill repositories
+
+Allows you to register, unregister, list, and sync external skill repositories (either local folders or remote Git URLs) to merge all skills into a unified folder `~/.agentforge/merged-skills`. When this folder is present, `agentforge` automatically uses it as the default vault root for bootstrapping (`init`) or linking (`link`).
+
+#### Add a repository
+
+Register a local repository path or a remote Git URL:
+
+```powershell
+# Register a local skill repository
+agentforge repo add C:\Repos\LLM\llm-skills-mattpocock
+
+# Register a remote Git repository
+agentforge repo add https://github.com/gmifsud/llm-skills-mattpocock.git --name mattpocock-git --branch main
+```
+
+#### Remove a repository
+
+Unregister a repository and clean up any cached clone or merged links:
+
+```powershell
+agentforge repo remove mattpocock-git
+```
+
+#### List repositories
+
+List all registered repositories, their type, sync status, and the number of discovered skills:
+
+```powershell
+agentforge repo list
+```
+
+#### Sync and merge skills
+
+Pull updates from remote repositories, discover skills across all sources, and rebuild the unified `~/.agentforge/merged-skills` directory:
+
+```powershell
+# Sync all repositories (vault takes priority on naming collisions by default)
+agentforge repo sync
+
+# Sync and allow external skills to override vault skills on name collision
+agentforge repo sync --force
+
+# Sync using an alternative local vault path
+agentforge repo sync --vault C:\path\to\my-vault
+```
+
 ## Configuration precedence
 
 Vault root resolution:
 
-1. `-VaultRoot` /`--vault` argument
+1. `-VaultRoot` / `--vault` argument
 2. `$env:AGENTFORGE_VAULT_ROOT`
-3. `C:\Repos\LLM\llm-skill-vault\skills` (Windows) or`~/repos/LLM/llm-skill-vault/skills` (Unix)
+3. `~/.agentforge/merged-skills/` (if it exists, created via `agentforge repo sync`)
+4. `C:\Repos\LLM\llm-skill-vault\skills` (Windows) or `~/repos/LLM/llm-skill-vault/skills` (Unix)
 
 Link type resolution:
 
