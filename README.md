@@ -51,9 +51,9 @@ agentforge init -Name my-new-app -Stack "TypeScript / Vite / .NET 8"
 
 ```bash
 # One-time PATH wiring
-echo 'alias agentforge="bash /mnt/c/Repos/LLM/llm-agentforge-cli/agentforge.sh"' >> ~/.zshrc
+echo 'alias agentforge="bash /mnt/d/Repos/LLM/llm-agentforge-cli/agentforge.sh"' >> ~/.zshrc
 # (or ~/.bashrc; adjust path for native Linux/macOS)
-chmod +x /mnt/c/Repos/LLM/llm-agentforge-cli/agentforge.sh
+chmod +x /mnt/d/Repos/LLM/llm-agentforge-cli/agentforge.sh
 source ~/.zshrc
 
 cd ~/repos/my-new-app
@@ -223,7 +223,7 @@ Add a new target by:
 | `failed to create symlink` on Windows | No admin / Dev Mode                                    | Use`-LinkType junction` (default)                     |
 | `vault not found`                     | `AGENTFORGE_VAULT_ROOT` unset and default path missing | Set the env var or pass`-VaultRoot`                   |
 | Re-running keeps local skills         | Preserve mode is the default                           | Use`-NoPreserve -Force` /`--no-preserve --force` to replace |
-| Skills missing in WSL2                | Different filesystem mount                             | Pass`--vault /mnt/c/Repos/LLM/llm-skill-vault/skills` |
+| Skills missing in WSL2                | Different filesystem mount                             | Pass`--vault /mnt/d/Repos/LLM/llm-skill-vault/skills` |
 
 ## Naming history
 
