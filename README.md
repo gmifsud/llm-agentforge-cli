@@ -2,6 +2,8 @@
 
 > Repo bootstrap for agent-driven workflows. Drop a token-optimised `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` into any project and link the shared skill vault into the right dot-folder. One command. Idempotent. Refuses rather than guesses.
 
+**New here?** Read [docs/USER-GUIDE.md](docs/USER-GUIDE.md): concepts, a first-fifteen-minutes walkthrough, everyday jobs and what every refusal means.
+
 ## Why
 
 Every new project follows the same ritual: write a `CLAUDE.md` that respects the [token-management strategies](../llm-skill-vault/Claude_Token_Management_Strategies.md), junction `.claude/skills/` to the central vault, repeat for `.codex/`, `.agents/` or `.gemini/`. `agentforge` makes that one command, and `agentforge repo` aggregates skills from external repositories into one merged view.
