@@ -1,0 +1,84 @@
+{
+  "title": "llm-agentforge-cli",
+  "_comment": "gd-tool-harness manifest. Risk is per invocation shape: anything that can remove a folder has its own Destructive id. Register this repo via a junction under D:\\Repos\\Tools or a manifestRoots entry in config.global.json.",
+  "tools": [
+    {
+      "id": "af-doctor",
+      "name": "Agentforge: diagnose project",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "applyArgs": ["doctor"],
+      "requiresArgs": ["--path"],
+      "risk": "ReadOnly",
+      "description": "Vault resolution, per-target doc and skills-link health for a project. Writes nothing. Run: gdt -Run af-doctor -- --path <project>"
+    },
+    {
+      "id": "af-source-list",
+      "name": "Agentforge: list skill sources",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "applyArgs": ["repo", "list"],
+      "risk": "ReadOnly",
+      "description": "Registered sources (~/.agentforge/repos.json), fetch state, revision and discovered skill counts."
+    },
+    {
+      "id": "af-source-fetch",
+      "name": "Agentforge: fetch git sources",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "applyArgs": ["repo", "fetch"],
+      "risk": "Changes",
+      "automation": "allowed",
+      "description": "Clone or fast-forward every registered git source into ~/.agentforge/repos. Never touches the merged view or any project. Safe to schedule."
+    },
+    {
+      "id": "af-view-build",
+      "name": "Agentforge: rebuild merged skills view",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "previewArgs": ["repo", "sync", "--no-fetch", "--dry-run"],
+      "applyArgs": ["repo", "sync", "--no-fetch"],
+      "risk": "Changes",
+      "description": "Discover skills across the vault and fetched sources and rebuild ~/.agentforge/merged-skills by staged swap. Preview lists collisions and counts."
+    },
+    {
+      "id": "af-init",
+      "name": "Agentforge: bootstrap a project",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "previewArgs": ["init", "--dry-run"],
+      "applyArgs": ["init"],
+      "requiresArgs": ["--path"],
+      "risk": "Changes",
+      "description": "Write CLAUDE.md/AGENTS.md/GEMINI.md and link <dot>/skills to the vault. Preserves existing docs and skills; refuses to merge into a folder linked elsewhere. Run: gdt -Run af-init -Apply -- --path <project> --target claude"
+    },
+    {
+      "id": "af-link-repoint",
+      "name": "Agentforge: REPOINT or REPLACE a project's skills folder",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "previewArgs": ["link", "--force", "--no-preserve", "--dry-run"],
+      "applyArgs": ["link", "--force", "--no-preserve"],
+      "requiresArgs": ["--path"],
+      "risk": "Destructive",
+      "description": "Removes an existing <dot>/skills link or directory and relinks it to the vault. A link is removed without touching its target; an ordinary directory is deleted."
+    },
+    {
+      "id": "af-source-remove",
+      "name": "Agentforge: unregister a source",
+      "category": "Agents",
+      "runtime": "node",
+      "script": "src/cli/main.js",
+      "applyArgs": ["repo", "remove"],
+      "requiresArgs": ["<id>"],
+      "risk": "Destructive",
+      "description": "Removes a source from repos.json and deletes its cached clone (git sources only, inside the managed cache). Never touches a registered local path."
+    }
+  ]
+}

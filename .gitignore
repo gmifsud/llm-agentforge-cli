@@ -7,3 +7,6 @@
 
 # Generated skill archives
 archives/
+
+# Serena MCP cache
+.serena/
