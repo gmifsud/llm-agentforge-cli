@@ -1,0 +1,295 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { createHash, randomUUID } = require('node:crypto');
+const { createPaths, loadConfig, loadRegistry, resolvePrimarySource, resolveDeployRoot } = require('../../src/infra/paths');
+const { sourceRootFor } = require('../../src/application/sources');
+const { discoverSkills } = require('../../src/discovery/discover-skills');
+const { computeView } = require('../../src/deployment/build-view');
+const { inspectProject } = require('../../src/application/project');
+const { TARGETS } = require('../../src/domain/targets');
+const { samePath, isWithinLexical } = require('../../src/infra/fs-inspect');
+const { ERROR, LIMITS, ReadError } = require('./constants');
+
+const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
+const nameKey = (name) => process.platform === 'win32' ? name.toLowerCase() : name;
+const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+
+/** Check link targets BEFORE realpath/stat can follow a link into a UNC/WSL share. */
+function localPath(input, depth = 0, memo = new Map()) {
+  if (typeof input !== 'string' || !input || input.includes('\0') || depth > 24) {
+    throw new ReadError(ERROR.BOUNDARY, 'Invalid or cyclic local path.', 403);
+  }
+  const clean = input.replace(/^\\\\\?\\(?=[a-z]:\\)/i, '');
+  if (/^[\\/]{2}|^\\\?\\|^\/mnt\//i.test(clean)) {
+    throw new ReadError(ERROR.BOUNDARY, 'Network and WSL paths are outside this local session.', 403);
+  }
+  const absolute = path.resolve(clean);
+  const root = path.parse(absolute).root;
+  let current = root;
+  const pieces = absolute.slice(root.length).split(path.sep).filter(Boolean);
+  for (let i = 0; i < pieces.length; i++) {
+    current = path.join(current, pieces[i]);
+    if (memo.has(current)) {
+      const resolved = memo.get(current);
+      if (resolved !== current) return localPath(path.join(resolved, ...pieces.slice(i + 1)), depth + 1, memo);
+      continue;
+    }
+    let stat;
+    try { stat = fs.lstatSync(current); } catch (e) {
+      if (['ENOENT', 'ENOTDIR'].includes(e.code)) return absolute;
+      throw new ReadError(ERROR.UNAVAILABLE, 'A local path could not be inspected.');
+    }
+    if (stat.isSymbolicLink()) {
+      const target = fs.readlinkSync(current);
+      // Validate the raw target before joining (Windows device prefixes included).
+      const normalized = target.replace(/^\\\\\?\\(?=[a-z]:\\)/i, '');
+      if (/^[\\/]{2}/.test(normalized)) throw new ReadError(ERROR.BOUNDARY, 'A link targets a network or WSL location.', 403);
+      const resolved = localPath(path.resolve(path.dirname(current), normalized), depth + 1, memo);
+      memo.set(current, resolved);
+      return localPath(path.join(resolved, ...pieces.slice(i + 1)), depth + 1, memo);
+    }
+    memo.set(current, current);
+  }
+  return absolute;
+}
+
+function contained(root, candidate) {
+  if (!isWithinLexical(root, candidate) || !isWithinLexical(localPath(root), localPath(candidate))) {
+    throw new ReadError(ERROR.BOUNDARY, 'The requested file escapes its source.', 403);
+  }
+}
+
+function availability(root) {
+  localPath(root);
+  try {
+    if (!fs.statSync(root).isDirectory()) return 'unreadable';
+    fs.readdirSync(root);
+    return 'available';
+  } catch (e) { return ['ENOENT', 'ENOTDIR'].includes(e.code) ? 'missing' : 'unreadable'; }
+}
+
+function safeLocation(location, kind) {
+  if (kind !== 'git') return location;
+  try { const url = new URL(location); url.username = ''; url.password = ''; url.search = ''; url.hash = ''; return url.toString(); }
+  catch { return /^git@[a-z0-9.-]+:.+$/i.test(location) ? location.split(/[?#]/)[0] : '[Git location withheld]'; }
+}
+
+/** Bounded ordinary-file reads shared by instruction and revision inspection. */
+function readPlainFile(root, file, limit = LIMITS.documentBytes) {
+  contained(root, file);
+  const before = fs.lstatSync(file);
+  if (!before.isFile() || before.isSymbolicLink()) throw new ReadError(ERROR.BOUNDARY, 'Only ordinary files can be displayed.', 403);
+  if (before.size > limit) throw new ReadError(ERROR.LARGE, 'File exceeds the local read size limit.', 413);
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const opened = fs.fstatSync(fd);
+    if (opened.ino !== before.ino || opened.dev !== before.dev) throw new ReadError(ERROR.CHANGED, 'The file changed while opening.', 409);
+    const buffer = Buffer.alloc(limit + 1);
+    let bytes = 0, read;
+    do { read = fs.readSync(fd, buffer, bytes, buffer.length - bytes, bytes); bytes += read; } while (read && bytes < buffer.length);
+    if (bytes > limit) throw new ReadError(ERROR.LARGE, 'File exceeds the local read size limit.', 413);
+    contained(root, file);
+    const after = fs.lstatSync(file), final = fs.fstatSync(fd);
+    if (after.isSymbolicLink() || after.ino !== opened.ino || after.dev !== opened.dev || final.size !== opened.size || final.mtimeMs !== opened.mtimeMs || bytes !== final.size) {
+      throw new ReadError(ERROR.CHANGED, 'The file changed during reading. Try again.', 409);
+    }
+    return new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytes));
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+/** Managed clones use .git directories. Unsupported layouts are explicitly unknown.
+ * No executable, config, hooks, gitdir/commondir pointer or object store is consulted.
+ */
+function revision(root) {
+  try {
+    const gitRoot = path.join(root, '.git');
+    contained(root, gitRoot);
+    if (!fs.lstatSync(gitRoot).isDirectory()) return null;
+    const hash = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
+    const head = readPlainFile(root, path.join(gitRoot, 'HEAD'), LIMITS.revisionHeadBytes).trim();
+    if (hash.test(head)) return head;
+    const ref = /^ref: (refs\/[a-z0-9_./-]+)$/i.exec(head)?.[1];
+    if (!ref || ref.split('/').some(p => !p || p === '.' || p === '..')) return null;
+    try {
+      const value = readPlainFile(root, path.join(gitRoot, ...ref.split('/')), LIMITS.revisionHeadBytes).trim();
+      return hash.test(value) ? value : null;
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    const packed = readPlainFile(root, path.join(gitRoot, 'packed-refs'), LIMITS.revisionRefsBytes);
+    for (const line of packed.split(/\r?\n/)) {
+      const [value, name] = line.split(' ');
+      if (name === ref && hash.test(value)) return value;
+    }
+    return null;
+  } catch { return null; }
+}
+
+class ReadService {
+  constructor({ homedir = os.homedir(), projects = [process.cwd()], vault, env = process.env } = {}) {
+    this.paths = createPaths({ homedir, scriptDir: path.resolve(__dirname, '../..') });
+    this.env = { AGENTFORGE_VAULT_ROOT: env.AGENTFORGE_VAULT_ROOT };
+    this.vault = vault;
+    this.projects = [...new Set(projects.map(p => { localPath(p); return path.resolve(p); }))]
+      .map(p => ({ id: idFor('project', p), name: path.basename(p), path: p }));
+    this.catalog = null;
+    this.documents = new Map();
+    this.stale = true;
+  }
+
+  context() {
+    try {
+      contained(this.paths.homedir, this.paths.configJson);
+      const config = loadConfig(this.paths);
+      // The core fallback probes this path with existsSync, which follows links.
+      if (!this.vault && !this.env.AGENTFORGE_VAULT_ROOT && !config.vaultRoot) {
+        localPath(this.paths.mergedSkills);
+        contained(this.paths.homedir, this.paths.reposJson);
+      }
+      const args = { cliVault: this.vault, env: this.env, paths: this.paths, config };
+      const primaryRoot = resolvePrimarySource(args);
+      const deployment = resolveDeployRoot(args);
+      localPath(primaryRoot); localPath(deployment.root);
+      return { readOnly: true, platform: process.platform, projects: this.projects, primaryRoot, deployment };
+    } catch (e) { throw this.configError(e); }
+  }
+
+  configError(e) {
+    if (e instanceof ReadError) return e;
+    return new ReadError(e.code || ERROR.UNAVAILABLE, 'Agent Forge configuration could not be read. Check config.json and repos.json.');
+  }
+
+  /** @returns {import('../contracts').Catalog} */
+  refresh() {
+    this.stale = true;
+    const startedAt = new Date().toISOString();
+    const context = this.context();
+    let repos;
+    try { contained(this.paths.homedir, this.paths.reposJson); repos = loadRegistry(this.paths).repositories; }
+    catch (e) { throw this.configError(e); }
+    const sourceNames = new Set();
+    for (const repo of repos) {
+      const key = repo.name.toLowerCase();
+      if (sourceNames.has(key)) throw new ReadError('CONFIG_INVALID', 'Duplicate source identifiers in repos.json.');
+      sourceNames.add(key);
+    }
+    const definitions = [{ name: 'Primary vault', kind: 'primary', root: context.primaryRoot, location: context.primaryRoot }];
+    for (const repo of repos) {
+      let root;
+      try { root = sourceRootFor(this.paths, repo); }
+      catch { throw new ReadError('CONFIG_INVALID', 'A source identifier is invalid.'); }
+      definitions.push({ name: repo.name, kind: repo.type, root, location: safeLocation(repo.url_or_path, repo.type), repo });
+    }
+    const sources = [], skills = [], rejected = [], observations = new Map(), documents = new Map();
+    const warnings = [...context.deployment.warnings];
+    for (const def of definitions) {
+      const source = { id: idFor(def.kind, def.name, def.root), name: def.name, kind: def.kind,
+        root: def.root, location: def.location, state: 'available', revision: null, count: null, rejectionCount: 0, error: null };
+      sources.push(source);
+      try {
+        source.state = availability(def.root);
+        if (source.state === 'missing' && def.kind === 'git') source.state = 'not-fetched';
+        if (source.state !== 'available') { source.error = 'Source folder is not available for inspection.'; continue; }
+        // Memoize ancestry only for this observation. Document reads validate afresh.
+        const pathMemo = new Map();
+        const physicalRoot = localPath(def.root, 0, pathMemo);
+        const found = discoverSkills(def.root, {
+          ...(def.kind === 'primary' ? { maxDepth: 1, manifest: false } : {}),
+          checkRead: (p) => {
+            if (!isWithinLexical(def.root, p) || !isWithinLexical(physicalRoot, localPath(p, 0, pathMemo))) {
+              throw new ReadError(ERROR.BOUNDARY, 'The requested file escapes its source.', 403);
+            }
+          }, reportReadErrors: true,
+        });
+        observations.set(source.id, found);
+        source.count = found.skills.length;
+        source.rejectionCount = found.rejected.length;
+        if (def.kind === 'git') { source.revision = revision(def.root); if (!source.revision) warnings.push(`Local revision unavailable for ${source.name}.`); }
+        for (const entry of found.skills) {
+          const skill = { id: idFor(source.id, entry.relativePath), name: entry.name, sourceId: source.id, relativePath: entry.relativePath };
+          skills.push(skill);
+          documents.set(skill.id, { ...skill, root: def.root, directory: entry.absolutePath, physicalRoot });
+        }
+        rejected.push(...found.rejected.map(r => ({ sourceId: source.id, path: r.path, reason: r.reason })));
+      } catch (e) {
+        source.state = e.code === ERROR.BOUNDARY ? 'rejected' : 'unreadable';
+        source.error = e instanceof ReadError ? e.message : 'Source discovery failed.';
+      }
+      if (skills.length > LIMITS.candidates) throw new ReadError(ERROR.LIMIT, `Catalogue exceeds ${LIMITS.candidates} candidates.`);
+    }
+    let winnerIds = [], collisions = [];
+    // A missing source cannot be treated as an intentionally empty contribution.
+    const mergeAvailable = sources.every(s => s.state === 'available');
+    if (mergeAvailable) {
+      const view = computeView({ primaryRoot: context.primaryRoot, repos,
+        cacheRootFor: repo => sourceRootFor(this.paths, repo), forceExternal: false,
+        discover: (root, opts) => observations.get((opts?.manifest === false ? sources[0] : sources.find(s => s.kind !== 'primary' && s.root === root)).id),
+      });
+      winnerIds = view.entries.map(e => {
+        const winner = skills.find(s => s.name === e.name && documents.get(s.id).directory === e.absolutePath &&
+          (s.sourceId === sources[0].id ? e.source === 'vault' : sources.find(x => x.id === s.sourceId).name === e.source));
+        if (!winner) throw new ReadError(ERROR.CHANGED, 'Sources changed during the merge observation. Refresh again.', 409);
+        return winner.id;
+      });
+      for (const winnerId of winnerIds) {
+        const winner = documents.get(winnerId);
+        const candidates = skills.filter(s => nameKey(s.name) === nameKey(winner.name)).map(s => s.id);
+        if (candidates.length > 1) collisions.push({ name: winner.name, winnerId, candidateIds: candidates });
+      }
+    } else warnings.push('Merge preview unavailable: one or more source folders could not be inspected.');
+    skills.sort((a, b) => compare(a.name, b.name) || compare(a.sourceId, b.sourceId) || compare(a.relativePath, b.relativePath));
+    const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
+      status: sources.some(s => s.state !== 'available') || rejected.length ? 'partial' : 'complete',
+      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable };
+    this.documents = documents; this.catalog = catalog; this.stale = false;
+    return catalog;
+  }
+
+  document(id, generation) {
+    if (this.stale || !this.catalog || generation !== this.catalog.generation) throw new ReadError(ERROR.STALE, 'Refresh the catalogue before reading this document.', 409);
+    const entry = this.documents.get(id);
+    if (!entry) throw new ReadError(ERROR.NOT_FOUND, 'Skill not found.', 404);
+    const file = path.join(entry.directory, 'SKILL.md');
+    contained(entry.root, file);
+    if (localPath(entry.root) !== entry.physicalRoot) throw new ReadError(ERROR.CHANGED, 'The source root changed. Refresh the catalogue.', 409);
+    try {
+      const text = readPlainFile(entry.root, file);
+      return { id, sourceId: entry.sourceId, relativePath: entry.relativePath, text, readAt: new Date().toISOString() };
+    } catch (e) {
+      if (e instanceof ReadError) throw e;
+      throw new ReadError(ERROR.UNAVAILABLE, 'SKILL.md could not be read as UTF-8 text. Refresh and try again.');
+    }
+  }
+
+  project(id) {
+    const project = this.projects.find(p => p.id === id);
+    if (!project) throw new ReadError(ERROR.NOT_FOUND, 'Project not configured for this session.', 404);
+    const { deployment } = this.context();
+    const state = availability(project.path);
+    const result = { project, readAt: new Date().toISOString(), deployment, targets: [], state, warnings: [] };
+    if (state !== 'available') { result.warnings.push('Project folder is missing or unreadable.'); return result; }
+    // InspectProject follows target links; validate their local boundaries first.
+    for (const target of Object.values(TARGETS)) {
+      localPath(path.join(project.path, target.doc));
+      localPath(path.join(project.path, target.dir, 'skills'));
+    }
+    localPath(deployment.root);
+    const libraryState = availability(deployment.root);
+    if (libraryState !== 'available') result.warnings.push('Effective skill library is missing or unreadable.');
+    const report = inspectProject({ projectRoot: project.path, vaultRoot: deployment.root, checkRead: localPath });
+    result.targets = report.targets.map(t => {
+      let docExists = false;
+      try { docExists = fs.statSync(path.join(project.path, t.doc)).isFile(); } catch { /* absence is reported */ }
+      const readable = t.link.kind === 'directory' || (t.link.kind === 'link' && !t.link.broken)
+        ? availability(path.join(project.path, t.dir, 'skills')) === 'available' : true;
+      return { id: t.id, doc: t.doc, docExists,
+        kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null,
+        match: t.link.kind === 'link' && !t.link.broken && readable && libraryState === 'available'
+          ? (samePath(t.link.resolvedTarget, deployment.root) ? 'matches' : 'differs') : 'unknown' };
+    });
+    return result;
+  }
+}
+module.exports = { ReadService, localPath, contained, availability };

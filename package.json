@@ -9,6 +9,10 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "node --test \"tests/**/*.test.js\"",
-    "agentforge": "node src/cli/main.js"
+    "agentforge": "node src/cli/main.js",
+    "dashboard:start": "node dashboard/server/main.js",
+    "dashboard:build": "npm --prefix dashboard/web run build",
+    "dashboard:test": "npm --prefix dashboard/web test",
+    "dashboard:e2e": "npm --prefix dashboard/web run e2e"
   }
 }

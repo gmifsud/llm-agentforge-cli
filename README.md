@@ -4,6 +4,8 @@
 
 **New here?** Read [docs/USER-GUIDE.md](docs/USER-GUIDE.md): concepts, a first-fifteen-minutes walkthrough, everyday jobs and what every refusal means.
 
+**Local dashboard:** [docs/DASHBOARD.md](docs/DASHBOARD.md) covers the optional Angular/Node read-only Sources, Skills and Projects UI, build/start commands, and validation. Discovery and write operations are deferred.
+
 ## Why
 
 Every new project follows the same ritual: write a `CLAUDE.md` that respects the [token-management strategies](../llm-skill-vault/Claude_Token_Management_Strategies.md), junction `.claude/skills/` to the central vault, repeat for `.codex/`, `.agents/` or `.gemini/`. `agentforge` makes that one command, and `agentforge repo` aggregates skills from external repositories into one merged view.

@@ -44,8 +44,10 @@ function planProject({ projectRoot, targetSelector, vars, templatesDir, vaultRoo
 }
 
 /** Structured diagnostics. Presence is reported separately from health. */
-function inspectProject({ projectRoot, vaultRoot }) {
+function inspectProject({ projectRoot, vaultRoot, checkRead = () => {} }) {
   const root = path.resolve(projectRoot);
+  checkRead(root);
+  checkRead(vaultRoot);
   const vaultState = inspectDestination(vaultRoot);
   const vault = {
     path: vaultRoot,
@@ -56,14 +58,14 @@ function inspectProject({ projectRoot, vaultRoot }) {
     rejected: 0,
   };
   if (vault.ok) {
-    const d = discoverSkills(vaultRoot, { maxDepth: 1, manifest: false });
+    const d = discoverSkills(vaultRoot, { maxDepth: 1, manifest: false, checkRead });
     vault.skills = d.skills.length;
     vault.rejected = d.rejected.filter((r) => r.reason !== 'symbolic link skipped during scan').length;
     // A merged view is a directory of links; count those too.
     if (vaultState.kind === 'directory') {
-      const links = vaultState.entries.filter((e) => inspectDestination(path.join(vaultRoot, e)).kind === 'link');
+      const links = vaultState.entries.filter((e) => { checkRead(path.join(vaultRoot, e)); return inspectDestination(path.join(vaultRoot, e)).kind === 'link'; });
       if (links.length > 0) {
-        vault.skills = links.filter((e) => fs.existsSync(path.join(vaultRoot, e, 'SKILL.md'))).length;
+        vault.skills = links.filter((e) => { checkRead(path.join(vaultRoot, e, 'SKILL.md')); return fs.existsSync(path.join(vaultRoot, e, 'SKILL.md')); }).length;
         vault.viewLinks = links.length;
         vault.rejected = 0;
       }
@@ -73,6 +75,8 @@ function inspectProject({ projectRoot, vaultRoot }) {
   const targets = Object.values(TARGETS).map((t) => {
     const docPath = path.join(root, t.doc);
     const linkPath = path.join(root, t.dir, 'skills');
+    checkRead(docPath);
+    checkRead(linkPath);
     const link = inspectDestination(linkPath);
     let linkHealth = 'absent';
     if (link.kind === 'link') linkHealth = link.broken ? 'broken' : 'link';

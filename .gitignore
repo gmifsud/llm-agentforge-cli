@@ -10,3 +10,10 @@ archives/
 
 # Serena MCP cache
 .serena/
+
+# Dashboard dependencies and generated output
+dashboard/web/node_modules/
+dashboard/web/dist/
+dashboard/web/.angular/
+dashboard/web/test-results/
+dashboard/web/playwright-report/

@@ -12,19 +12,19 @@ const { refused } = require('../domain/errors');
  *   entries:    [{ name, source, absolutePath }]
  *   collisions: [{ name, kept, dropped }]
  */
-function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false }) {
+function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, discover = discoverSkills }) {
   const entries = new Map();
   const collisions = [];
   const rejected = [];
 
-  const primary = discoverSkills(primaryRoot, { maxDepth: 1, manifest: false });
+  const primary = discover(primaryRoot, { maxDepth: 1, manifest: false });
   rejected.push(...primary.rejected.map((r) => ({ source: 'vault', ...r })));
   for (const s of primary.skills) entries.set(key(s.name), { name: s.name, source: 'vault', absolutePath: s.absolutePath });
 
   for (const repo of repos) {
     const root = repo.type === 'git' ? cacheRootFor(repo) : repo.url_or_path;
     if (!fs.existsSync(root)) { rejected.push({ source: repo.name, path: root, reason: 'source path not found (not fetched?)' }); continue; }
-    const found = discoverSkills(root);
+    const found = discover(root);
     rejected.push(...found.rejected.map((r) => ({ source: repo.name, ...r })));
     for (const s of found.skills) {
       const k = key(s.name);
