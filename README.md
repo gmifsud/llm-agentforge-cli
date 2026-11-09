@@ -4,7 +4,7 @@
 
 **New here?** Read [docs/USER-GUIDE.md](docs/USER-GUIDE.md): concepts, a first-fifteen-minutes walkthrough, everyday jobs and what every refusal means.
 
-**Local dashboard:** [docs/DASHBOARD.md](docs/DASHBOARD.md) covers the optional Angular/Node read-only Sources, Skills and Projects UI, build/start commands, and validation. Discovery and write operations are deferred.
+**Dashboard:** [docs/DASHBOARD.md](docs/DASHBOARD.md) covers the local app: one board showing sources, the library and every project's agents, where you attach repositories, rebuild the library, choose collision winners and wire projects, each change previewed before it is applied.
 
 ## Why
 

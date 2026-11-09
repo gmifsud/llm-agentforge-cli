@@ -1,80 +1,128 @@
-# Agent Forge read-only dashboard
+# Agentforge dashboard
 
-M1 provides Sources, Skills and Projects over the existing local Agent Forge data. It cannot add/remove sources, fetch Git updates, rebuild the merged view, edit files or apply project changes. Online discovery is deferred.
+The dashboard is the interactive way to use Agentforge. It shows where your skills come from, what is in the library, and which agent in which project reads it, as one board with cables between them. Everything you can do on the command line for sources, the library and projects, you can do here, and every change is shown as a plain-language plan before anything on disk moves.
 
-## Build and run (Windows PowerShell)
+## Start it
 
-The CLI remains dependency-free and supports its existing Node versions. The separate Angular package requires Node 24.15+ within the Node 24 release line; validation used Node 24.22.1.
+Requires Node.js 24.15 or newer for the Angular build. The CLI itself still runs on Node 20.
 
 ```powershell
 Set-Location D:\Repos\LLM\llm-agentforge-cli
-npm --prefix dashboard/web ci --no-fund --no-audit
+npm --prefix dashboard/web ci --no-fund --no-audit   # first time only
 npm run dashboard:build
-npm run dashboard:start -- --project D:\Repos\LLM\llm-agentforge-cli --project D:\Repos\Tools\gd-tool-harness
+npm run dashboard:start
 ```
 
-Open the printed `http://127.0.0.1:<port>` URL. Ctrl+C stops the server and worker. The port is ephemeral unless `--port <number>` is supplied. No browser is opened automatically. Project paths are supplied at startup; no registry is written. Without `--project`, the startup working directory is inspected. `--vault <folder>` overrides the normal Agent Forge resolution.
+Open the printed `http://127.0.0.1:<port>` address. Ctrl+C stops it. Options:
 
-Pinned dependencies are recorded in `dashboard/web/package-lock.json`: Angular 22.0.8, CLI/build 22.0.9, TypeScript 6.0.3, RxJS 7.8.2. Use the lockfile rather than floating latest versions. Generated `dist`, `.angular`, test reports and `node_modules` are ignored.
+| Option | Effect |
+| :-- | :-- |
+| `--port <n>` | Use a fixed port instead of a random free one |
+| `--project <folder>` | Show this folder in Projects for this session only (repeatable). Without any, the folder you start from is shown |
+| `--vault <folder>` | Use this vault instead of the normal resolution |
 
-## Views and meaning
+Projects you add in the dashboard are remembered in `~/.agentforge/projects.json`, so you normally start it with no options.
 
-1. **Sources:** primary vault plus registered sources, local availability/revision, discovered counts and rejections. A missing/unfetched source has an unknown count, not zero. No registry is a valid empty external-source list.
-2. **Skills:** all discovered candidates, a default merged preview and name collisions. Search/filter/paging are local to the loaded catalogue. Select a row, then Read full SKILL.md to display escaped plain text. Text and paths are observed locally; no scripts or remote images are executed.
-3. **Projects:** choose a startup-configured folder, then Inspect project. Document presence, link health and library match are separate. A working link to a different library is labelled `differs`; runtime compatibility is not inferred.
+## The two pages
 
-Refresh rescans local data, never Git remotes. The merged preview is what current sources would produce under the core's default rules; it is not the materialized view or an applied revision. If any source is unavailable, inventory is partial and merge preview is unavailable. External edits can occur between scan and document read; timestamps identify each observation. A failed refresh keeps old rows visibly stale and pauses document reads until a successful refresh.
+### Wiring
+
+Three columns, left to right, in the order skills travel:
+
+| Column | Shows | You can |
+| :-- | :-- | :-- |
+| **Sources** | Your vault (always first, never written to) and every attached folder or Git repository, with how many skills each has and its state | Attach a repository, fetch updates for a Git source, detach |
+| **Library** | How many skills your agents can use, how many come from each source, and whether the library on disk matches what the sources would produce now | Build or rebuild it, choose which source wins when two have a skill with the same name, open the full skill list |
+| **Projects** | Each project folder and, for each agent in it, what that agent actually reads | Add a project, wire agents, repoint an agent that reads the wrong folder, remove a project from the list |
+
+The cables carry the state, and the same state is always written next to them in words:
+
+| Cable | Meaning |
+| :-- | :-- |
+| Green | Live: this source feeds the library, or this agent reads the library |
+| Amber, from your vault | The agent reads your vault directly and misses everything you attached |
+| Short amber stub | The agent reads some other folder |
+| Short red stub, dashed | The agent's link is broken |
+| Dashed indigo | A change you queued but have not applied |
+| Dashed grey | A source that is not available (missing, or a Git source not downloaded yet) |
+
+Agents are named for what they are: Claude Code (`CLAUDE.md`, `.claude/skills`), Codex (`AGENTS.md`, `.codex/skills`), Cursor and others (`AGENTS.md`, `.agents/skills`), Gemini CLI (`GEMINI.md`, `.gemini/skills`).
+
+On a narrow window, or zoomed in, the columns stack and the cables are hidden; every state is still in the text.
+
+### Skills
+
+Every skill found in every source, searchable and filterable by source. Switch between *Everything found*, *In the library*, and *Name clashes*. Select a skill to see where it comes from, read its `SKILL.md` as plain text, and, when another source has a skill with the same name, choose which one your agents get. Folders that were skipped while looking for skills, and why, are listed under the table.
+
+## How changes work
+
+Nothing you click writes to disk directly. Each action adds one or more steps to the **review sheet** at the bottom of the screen:
+
+1. Click an action, for example *Attach a repository*. The sheet opens with the steps it needs, in pipeline order: sources first, then the library, then projects. Attaching a folder, for instance, queues *Attach* and *Rebuild the library*, because attached skills only reach your agents through the library.
+2. Each step is checked against your folders and described in plain words: what will be written, linked, unlinked or deleted. Lines are colour-coded: green adds, red removes, indigo changes, amber needs your attention.
+3. If a step cannot be made, it says why, and *Apply* is disabled until you remove it. A step that only depends on an earlier queued step (wiring a project to a library a queued rebuild will create) is not treated as blocked.
+4. *Apply* runs the steps in order. Each one is planned again against the disk immediately before it runs, so a preview that went out of date cannot be applied blindly. If one step is refused or fails, the steps after it are not run.
+5. The sheet shows what actually happened for each step, then the board refreshes.
+
+| Action | What it does | What it never does |
+| :-- | :-- | :-- |
+| Attach a folder | Registers it in `repos.json`; reads it in place | Write into the folder |
+| Attach a Git URL | Registers it, then downloads it into `~/.agentforge/repos/<name>` | Run Git hooks or submodules |
+| Fetch updates | Fast-forwards Git sources | Change the library until it is rebuilt |
+| Detach | Unregisters; deletes the downloaded copy of a Git source | Delete a folder source |
+| Rebuild the library | Rebuilds `~/.agentforge/merged-skills` in a staging folder and swaps it in | Leave a half-built library if it fails |
+| Choose a winner | Saves `preferences` in `~/.agentforge/config.json`; `agentforge repo sync` honours it too | Rename or edit either skill |
+| Add / remove a project | Edits `~/.agentforge/projects.json` | Touch the project folder |
+| Wire agents | Writes missing instruction files, links `<agent>/skills` to the library, adds that link to `.gitignore` | Overwrite an existing instruction file, or merge into a folder linked elsewhere |
+| Repoint | Removes the old link and links to the library | Touch the folder the old link pointed at |
+
+The dashboard wires projects to the **library**, never directly to your vault, so attached sources and your collision choices always reach your agents. Use the command line if you deliberately want a vault-only link.
 
 ## Local boundary
 
-- Node listens only on `127.0.0.1`. The built UI and API share an origin. Exact Host and Origin checks, cross-site rejection and a required `X-Agentforge-Read: 1` header apply to the API. There is no CORS allow-all or arbitrary command endpoint.
-- Only GET/HEAD are supported; HEAD never starts a scan. Project and document requests use IDs from the session, not user-supplied file paths. Non-local Windows UNC/WSL paths are refused, including supported symlinks targeting them.
-- Documents must be ordinary UTF-8 SKILL.md files contained in their discovered source. Symlinked files, escaping paths and files over 1 MiB are refused. Local link ancestry is checked afresh for document reads. The application is not a sandbox against a hostile process concurrently rewriting local filesystem state.
-- Read jobs use one worker, one active job, a 15-second deadline and no unbounded queue. Simultaneous catalogue refreshes coalesce. Idle worker exit/error invalidates that worker so the next read can restart it. Catalogue size is limited to 5,000 candidates.
-- Revision display uses contained ordinary-file reads of `.git/HEAD`, loose branch refs or `packed-refs`; no executable or Git config is loaded. HEAD/loose refs are limited to 4 KiB, packed refs to 1 MiB. Full SHA-1/SHA-256 values are displayed. Gitdir files, escaping metadata links, symbolic branch refs, unsupported ref formats and oversized metadata show an unavailable revision. This is metadata inspection, not object-database validation.
-- Runtime state is memory-only. No file watcher, background refresh, telemetry, disk cache or persisted operation log is created. Browser and OS caches and development build outputs are outside the managed-file read-only guarantee.
+- The server listens on `127.0.0.1` only. Page and API share one origin, with exact Host and Origin checks and no CORS.
+- Reads are `GET` with a custom header. Changes are `POST` to exactly two routes, `/api/v1/changes/preview` and `/api/v1/changes/apply`, and additionally require an exact `Origin`, a second custom header, `application/json`, no query string and a body under 64 KiB. Any other method or route is refused.
+- Folder paths typed in the dashboard must be absolute local paths. Network shares and WSL paths are refused, including through links. Everything else is addressed by IDs from the current session.
+- Reads run in one worker with a 15-second deadline. Changes run in a second worker, one job at a time, with a 3-minute deadline so a Git download can finish. Neither queues work without limit.
+- `SKILL.md` is shown as escaped text; scripts and remote images in it are never executed or loaded. Documents over 1 MiB, symbolic-link files and paths escaping their source are refused.
+- No telemetry, file watcher or background job. State lives in the files listed above and in memory.
 
 ## Validation
 
-Run from the repository root:
+From the repository root:
 
 ```powershell
-npm test
-npm run dashboard:test
+npm test                 # core + server, including the write paths
+npm run dashboard:test   # client state, tray ordering, apply flow
 npm run dashboard:build
-npm run dashboard:e2e
+npm run dashboard:e2e    # real browser: wiring, preview-without-write, attach, add, wire, repoint, refusals, zoom, focus
 git diff --check
 ```
 
-Browser tests use headless Microsoft Edge on Windows (already installed on the validated host). To use another installed Playwright channel, set `AGENTFORGE_BROWSER_CHANNEL`. Outside Windows, install the Playwright Chromium browser explicitly before browser tests; cross-platform runtime behavior has not been qualified by this Windows-local milestone.
-
-Tests create isolated temporary vaults, registries, cached Git metadata and project links. They compare content hashes and link targets before/after reads, test same-origin and path refusals, verify core merge parity, recover from worker timeouts, and measure five warm reads of 1,000 external skills across ten sources. Browser tests cover the real built Angular app and Node adapter, external fixture edits, inert instruction text, narrow layout, keyboard focus and CSS zoom. Screenshots/traces are local ignored test outputs.
+Browser tests use headless Microsoft Edge on Windows. Set `AGENTFORGE_BROWSER_CHANNEL` to use another installed channel. Every test builds its own temporary vault, sources, registry and projects, and checks that previews change nothing on disk and that repointing leaves the old target untouched.
 
 ## Development
 
-Use two terminals:
-
 ```powershell
-# Terminal 1: fixed local adapter port; allow only the configured development origin.
-npm run dashboard:start -- --port 4311 --dev-origin http://127.0.0.1:4200 --project D:\Repos\LLM\llm-agentforge-cli
+# Terminal 1: server on a fixed port, allowing the dev origin
+npm run dashboard:start -- --port 4311 --dev-origin http://127.0.0.1:4200
 
-# Terminal 2: Angular CLI, loopback only, proxying /api to the adapter.
+# Terminal 2: Angular dev server, proxying /api to it
 npm --prefix dashboard/web start
 ```
 
-Open `http://127.0.0.1:4200`. For normal use, prefer the single-origin production build. The development proxy and the production server do not support LAN clients.
+Open `http://127.0.0.1:4200`. To try changes without touching your real setup, start the server with `USERPROFILE` pointing at an empty folder; everything it writes then goes there.
 
 ## Troubleshooting
 
-| Symptom | Meaning / action |
-| --- | --- |
-| Dashboard assets missing | Run `npm run dashboard:build` from the repository root. |
-| Configuration could not be read | Inspect existing Agent Forge config/registry; the dashboard will not repair or overwrite them. |
-| Source is rejected | Its path fails local-boundary or containment checks. Review the displayed source and fix it outside the dashboard if appropriate. |
-| Merge preview unavailable | At least one source is missing, unfetched or unreadable. Inspect source state; no fetch is attempted. |
-| Stale catalogue / file changed | Refresh and reselect the skill. External source changes are not pinned. |
-| Read timed out / busy | Let the active read finish, then refresh. After timeout the worker restarts on the next request. |
-| Unknown project | Restart with the intended `--project` path. |
-| Non-local path refused | M1 is native Windows/local storage only; it does not traverse WSL or shares. |
-
-The CLI remains the existing way to perform mutations. Review its effects separately: fetching a checkout can immediately affect projects linked to it. Dashboard M1 does not change that behavior.
+| You see | Meaning and fix |
+| :-- | :-- |
+| *Dashboard assets are missing* | Run `npm run dashboard:build` |
+| *The dashboard server is not responding* | The terminal running `dashboard:start` was closed. Start it again and refresh |
+| A source says *Not downloaded yet* | Use *Fetch updates* on it |
+| Library says *Out of date* | Sources changed since the last build. *Rebuild the library* |
+| Library says *Cannot compare right now* | A source is missing or unreadable, so the dashboard will not guess what the library should hold |
+| An agent *Reads your vault only* | It was linked by an older setup. *Repoint* links it to the library |
+| *…points somewhere else. Use Repoint* | The agent's skills folder links to another folder. Repoint if that is not deliberate |
+| *Changes must come from this dashboard page* | A request came from another page or tool. Only the dashboard's own page can make changes |
+| A skill you expected is missing | Open Skills and expand *folders were skipped*. Links inside a source are never followed, so a skill that is itself a link is skipped |

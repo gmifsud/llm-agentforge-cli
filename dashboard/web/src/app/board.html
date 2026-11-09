@@ -1,0 +1,234 @@
+@if (s.catalog(); as c) {
+<section class="bay" #bay aria-label="Skill sources, library and projects">
+  <svg class="cables" [class.settled]="animated()" aria-hidden="true" focusable="false"
+       [attr.width]="size().w" [attr.height]="size().h" [attr.viewBox]="'0 0 ' + size().w + ' ' + size().h">
+    @for (cable of cables(); track cable.id) {
+      <path [attr.d]="cable.d" [attr.class]="'cable ' + cable.tone + (cable.stub ? ' stub' : '')" pathLength="1" />
+    }
+  </svg>
+
+  <!-- ─────────────── Sources ─────────────── -->
+  <div class="column" aria-labelledby="h-sources">
+    <header class="column-head">
+      <h2 id="h-sources">Sources</h2>
+      <p>Where skills come from</p>
+    </header>
+
+    @if (s.vault(); as v) {
+      <article class="module vault" [attr.aria-label]="'Your vault, ' + sourceState(v)">
+        <h3>Your vault</h3>
+        <p class="path">{{ v.root }}</p>
+        <p class="state" [class.fault]="v.state !== 'available'">{{ sourceState(v) }}</p>
+        <p class="fine">Agentforge only reads this folder.</p>
+        <span class="jack out" [attr.data-jack]="'src:' + v.id"></span>
+      </article>
+    }
+
+    @for (src of s.attached(); track src.id) {
+      <article class="module" [class.leaving]="plannedSource(src) === 'Will be detached'" [attr.aria-label]="src.name + ', ' + sourceState(src)">
+        <h3>{{ src.name }} <span class="kind">{{ src.kind === 'git' ? 'Git' : 'Folder' }}</span></h3>
+        <p class="path">{{ src.location }}</p>
+        <p class="state" [class.caution]="src.state === 'not-fetched'" [class.fault]="src.state !== 'available' && src.state !== 'not-fetched'">
+          {{ sourceState(src) }}@if (src.revision) { <span class="rev">at {{ short(src.revision) }}</span> }
+        </p>
+        @if (src.rejectionCount) { <p class="fine">{{ src.rejectionCount }} {{ src.rejectionCount === 1 ? 'entry was' : 'entries were' }} skipped. See the skill library for details.</p> }
+        @if (plannedSource(src); as p) { <p class="planned-note">{{ p }}</p> }
+        <div class="actions">
+          @if (src.kind === 'git') { <button type="button" class="quiet" (click)="s.fetch(src)" [disabled]="s.applying()">Fetch updates</button> }
+          <button type="button" class="quiet" (click)="s.detach(src)" [disabled]="s.applying()">Detach</button>
+        </div>
+        <span class="jack out" [attr.data-jack]="'src:' + src.id"></span>
+      </article>
+    }
+
+    @for (item of pendingAttach(); track item.uid) {
+      <article class="module ghost" aria-label="Planned source">
+        <h3>{{ item.preview?.args?.['name'] || 'New source' }}</h3>
+        <p class="path">{{ item.change.args?.['location'] }}</p>
+        <p class="planned-note">Will be attached when you apply your changes</p>
+        <span class="jack out" [attr.data-jack]="'ghost:' + item.uid"></span>
+      </article>
+    }
+
+    @if (!s.attached().length && !pendingAttach().length && !attachOpen()) {
+      <p class="hint">Attach another folder or Git repository of skills to use them alongside yours.</p>
+    }
+
+    @if (attachOpen()) {
+      <form class="module form" (submit)="submitAttach($event)" aria-labelledby="attach-title">
+        <h3 id="attach-title">Attach a repository</h3>
+        <label for="attach-location">Folder path or Git URL</label>
+        <input id="attach-location" autocomplete="off" spellcheck="false" placeholder="D:\Repos\LLM\my-skills"
+               [value]="location()" (input)="location.set($any($event.target).value)" required>
+        <label for="attach-name">Name <span class="optional">optional</span></label>
+        <input id="attach-name" autocomplete="off" spellcheck="false" [placeholder]="suggestedName() || 'my-skills'"
+               [value]="name()" (input)="name.set($any($event.target).value)">
+        @if (isGit()) {
+          <label for="attach-branch">Branch <span class="optional">optional, the default branch is used otherwise</span></label>
+          <input id="attach-branch" autocomplete="off" spellcheck="false" [value]="branch()" (input)="branch.set($any($event.target).value)">
+        }
+        <p class="fine">{{ isGit() ? 'It is downloaded, then the library is rebuilt to include it.' : 'The folder is read in place, then the library is rebuilt to include it.' }}</p>
+        <div class="actions">
+          <button type="submit" class="primary" [disabled]="!location().trim()">Attach</button>
+          <button type="button" class="quiet" (click)="attachOpen.set(false)">Cancel</button>
+        </div>
+      </form>
+    } @else {
+      <button type="button" class="add" (click)="attachOpen.set(true)" [disabled]="s.applying()">Attach a repository</button>
+    }
+  </div>
+
+  <!-- ─────────────── Library ─────────────── -->
+  <div class="column" aria-labelledby="h-library">
+    <header class="column-head">
+      <h2 id="h-library">Library</h2>
+      <p>What your agents can use</p>
+    </header>
+
+    <article class="module library" aria-label="Library">
+      <span class="jack in" data-jack="lib-in"></span>
+      <div class="library-total">
+        <strong>{{ s.libraryTotal() }}</strong>
+        <span>{{ s.libraryTotal() === 1 ? 'skill' : 'skills' }} from {{ s.contribution().length }} {{ s.contribution().length === 1 ? 'source' : 'sources' }}</span>
+      </div>
+      @if (s.contribution().length > 1) {
+        <div class="mix" role="img" [attr.aria-label]="'Library made of ' + s.contribution().length + ' sources'">
+          @for (part of s.contribution(); track part.source.id; let i = $index) {
+            <span [style.flex-grow]="part.count" [style.background]="shade(i)"></span>
+          }
+        </div>
+        <ul class="legend">
+          @for (part of s.contribution(); track part.source.id; let i = $index) {
+            <li><span class="swatch" [style.background]="shade(i)"></span>{{ part.source.kind === 'primary' ? 'Your vault' : part.source.name }} <b>{{ part.count }}</b></li>
+          }
+        </ul>
+      }
+      @if (libraryStatus(); as st) { <p class="state" [class]="'state ' + st.tone" role="status">{{ st.text }}</p> }
+      <p class="path">{{ c.library.path }}</p>
+      <div class="actions">
+        <button type="button" [class.primary]="c.library.inSync === false || !c.library.built" [class.quiet]="c.library.inSync !== false && c.library.built"
+                (click)="s.rebuild()" [disabled]="s.applying()">{{ c.library.built ? 'Rebuild the library' : 'Build the library' }}</button>
+        <a routerLink="/library" class="link">Browse all skills</a>
+      </div>
+      <span class="jack out" data-jack="lib-out"></span>
+    </article>
+
+    @if (c.collisions.length) {
+      <article class="module collisions" aria-labelledby="h-collisions">
+        <h3 id="h-collisions">Same name, more than one source</h3>
+        <p class="fine">The library holds one of each. Choose which one your agents get.</p>
+        @for (col of collisions(); track col.name) {
+          <fieldset class="choice">
+            <legend>{{ col.name }}</legend>
+            @for (id of col.candidateIds; track id) {
+              @if (s.skillById(id); as sk) {
+                <label>
+                  <input type="radio" [name]="'pick-' + col.name" [checked]="plannedChoice(col.name) ? (s.sourceById(sk.sourceId)?.key === plannedChoice(col.name)) : id === col.winnerId"
+                         (change)="choose(col.name, sk.sourceId)" [disabled]="s.applying()">
+                  {{ s.sourceName(sk.sourceId) }}
+                  @if (id === col.winnerId && !plannedChoice(col.name)) { <span class="tag">{{ col.preferredSourceId ? 'your choice' : 'default' }}</span> }
+                </label>
+              }
+            }
+            @if (plannedChoice(col.name)) { <p class="planned-note">Changes when you apply</p> }
+          </fieldset>
+        }
+        @if (c.collisions.length > 5) {
+          <button type="button" class="quiet" (click)="showAllCollisions.set(!showAllCollisions())">{{ showAllCollisions() ? 'Show fewer' : 'Show all ' + c.collisions.length }}</button>
+        }
+      </article>
+    }
+  </div>
+
+  <!-- ─────────────── Projects ─────────────── -->
+  <div class="column" aria-labelledby="h-projects">
+    <header class="column-head">
+      <h2 id="h-projects">Projects</h2>
+      <p>Where your agents read skills</p>
+    </header>
+
+    @for (report of c.projects; track report.project.id) {
+      <article class="module project" [attr.aria-labelledby]="'p-' + report.project.id">
+        <h3 [id]="'p-' + report.project.id">{{ report.project.name }}</h3>
+        <p class="path">{{ report.project.path }}</p>
+        @if (report.state !== 'available') {
+          @for (w of report.warnings; track $index) { <p class="state fault">{{ w }}</p> }
+        } @else {
+          @if (!shown(report).length) { <p class="state muted">No agents read skills here yet.</p> }
+          <ul class="agents">
+            @for (t of shown(report); track t.id) {
+              <li [class]="'agent ' + feeds(t).tone" [class.planned]="plannedFor(report.project.id, t.id)">
+                <span class="jack in" [attr.data-jack]="'tgt:' + report.project.id + ':' + t.id"></span>
+                <span class="agent-name">{{ agents[t.id] }}</span>
+                <span class="agent-state">
+                  @if (plannedFor(report.project.id, t.id)) { Will read the library }
+                  @else { {{ feeds(t).text }}@if (t.feeds === 'copy') { ({{ t.entries }}) } }
+                </span>
+                @if (t.feeds !== 'none' || t.docExists) { <span class="agent-doc">{{ t.doc }} {{ t.docExists ? 'present' : 'missing' }}</span> }
+                @if (needsRepoint(t) && !plannedFor(report.project.id, t.id)) {
+                  <button type="button" class="quiet tiny" (click)="s.repoint(report.project.id, t)" [disabled]="s.applying()"
+                          [attr.aria-label]="'Repoint ' + agents[t.id] + ' in ' + report.project.name + ' to the library'">Repoint</button>
+                }
+              </li>
+            }
+          </ul>
+          @if (shown(report).length && unwired(report).length) { <p class="fine">Not wired: {{ unwired(report) }}</p> }
+        }
+
+        @if (wiring() === report.project.id) {
+          <form class="wire" (submit)="submitWire($event, report)" [attr.aria-label]="'Wire agents in ' + report.project.name">
+            <fieldset>
+              <legend>Which agents should read the library?</legend>
+              @for (id of agentIds; track id) {
+                <label><input type="checkbox" [checked]="wireTargets().has(id)" (change)="toggleTarget(id, $any($event.target).checked)"> {{ agents[id] }}</label>
+              }
+            </fieldset>
+            <label class="inline"><input type="checkbox" [checked]="wireDocs()" (change)="wireDocs.set($any($event.target).checked)"> Write the instruction file if it is missing</label>
+            <label class="inline"><input type="checkbox" [checked]="wireCopy()" (change)="wireCopy.set($any($event.target).checked)"> Copy the skills instead of linking</label>
+            @if (wireCopy()) { <p class="fine">A copy does not follow later changes to the library.</p> }
+            <div class="actions">
+              <button type="submit" class="primary" [disabled]="!wireTargets().size">Wire</button>
+              <button type="button" class="quiet" (click)="wiring.set('')">Cancel</button>
+            </div>
+          </form>
+        } @else if (report.state === 'available') {
+          <div class="actions">
+            <button type="button" class="quiet" (click)="openWire(report)" [disabled]="s.applying()">Wire agents</button>
+            @if (report.project.origin === 'saved') {
+              <button type="button" class="quiet" (click)="s.forgetProject(report.project.id)" [disabled]="s.applying()">Remove from list</button>
+            }
+          </div>
+        } @else if (report.project.origin === 'saved') {
+          <div class="actions"><button type="button" class="quiet" (click)="s.forgetProject(report.project.id)">Remove from list</button></div>
+        }
+      </article>
+    }
+
+    @for (item of pendingProjects(); track item.uid) {
+      <article class="module ghost"><h3>{{ item.change.args?.['path'] }}</h3><p class="planned-note">Will be added when you apply your changes</p></article>
+    }
+
+    @if (!c.projects.length && !pendingProjects().length && !projectOpen()) {
+      <p class="hint">Add the folder of a repository you work in, then wire its agents to the library.</p>
+    }
+
+    @if (projectOpen()) {
+      <form class="module form" (submit)="submitProject($event)" aria-labelledby="project-title">
+        <h3 id="project-title">Add a project</h3>
+        <label for="project-path">Project folder</label>
+        <input id="project-path" autocomplete="off" spellcheck="false" placeholder="D:\Repos\my-app"
+               [value]="projectPath()" (input)="projectPath.set($any($event.target).value)" required>
+        <p class="fine">Nothing in the folder changes until you wire it.</p>
+        <div class="actions">
+          <button type="submit" class="primary" [disabled]="!projectPath().trim()">Add</button>
+          <button type="button" class="quiet" (click)="projectOpen.set(false)">Cancel</button>
+        </div>
+      </form>
+    } @else {
+      <button type="button" class="add" (click)="projectOpen.set(true)" [disabled]="s.applying()">Add a project</button>
+    }
+  </div>
+</section>
+} @else if (!s.busy()) {
+  <p class="empty-state">The dashboard could not read your workspace yet. Use Refresh to try again.</p>
+}

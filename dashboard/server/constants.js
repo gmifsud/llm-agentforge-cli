@@ -1,9 +1,11 @@
 'use strict';
 
-const LIMITS = Object.freeze({ documentBytes: 1024 * 1024, revisionHeadBytes: 4096, revisionRefsBytes: 1024 * 1024, jobMs: 15000, candidates: 5000 });
+const LIMITS = Object.freeze({ documentBytes: 1024 * 1024, revisionHeadBytes: 4096, revisionRefsBytes: 1024 * 1024, jobMs: 15000, writeMs: 180000, candidates: 5000, bodyBytes: 64 * 1024 });
 const API = '/api/v1';
 const API_HEADER = 'x-agentforge-read';
 const API_HEADER_VALUE = '1';
+const WRITE_HEADER = 'x-agentforge-write';
+const WRITE_ROUTES = Object.freeze({ '/api/v1/changes/preview': 'preview', '/api/v1/changes/apply': 'apply' });
 const HOST = '127.0.0.1';
 const ERROR = Object.freeze({
   INVALID: 'INVALID_REQUEST', BOUNDARY: 'READ_BOUNDARY', NOT_FOUND: 'NOT_FOUND', STALE: 'STALE_CATALOG',
@@ -21,4 +23,4 @@ function errorDto(error) {
     retryable: known && [503, 504, 409].includes(error.status),
   } };
 }
-module.exports = { LIMITS, API, API_HEADER, API_HEADER_VALUE, HOST, ERROR, ReadError, errorDto };
+module.exports = { LIMITS, API, API_HEADER, API_HEADER_VALUE, WRITE_HEADER, WRITE_ROUTES, HOST, ERROR, ReadError, errorDto };

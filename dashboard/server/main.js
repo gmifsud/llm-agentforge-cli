@@ -19,8 +19,8 @@ function parse(argv) {
 }
 async function main() {
   const app = await createDashboard(parse(process.argv.slice(2)));
-  console.log(`Agent Forge read-only dashboard: ${app.url}`);
-  console.log('Local reads only. Press Ctrl+C to stop.');
+  console.log(`Agentforge dashboard: ${app.url}`);
+  console.log('Local only. Every change is previewed in the browser before it is applied. Press Ctrl+C to stop.');
   let closing = false;
   const close = async () => { if (closing) return; closing = true; await app.close(); };
   process.once('SIGINT', close); process.once('SIGTERM', close);

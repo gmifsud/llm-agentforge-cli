@@ -34,10 +34,10 @@ test('dashboard HTTP serves real read routes without managed-data changes', asyn
   const doc = await request(app.url, `/api/v1/skills/${c.skills[0].id}/document?generation=${c.generation}`);
   assert.equal(doc.status, 200); assert.equal(doc.headers['cache-control'], 'no-store');
   assert.equal((await request(app.url, `/api/v1/projects/${context.projects[0].id}`)).status, 200);
-  assert.equal((await request(app.url, '/skills')).status, 200);
+  assert.equal((await request(app.url, '/library')).status, 200);
   assert.deepEqual(contentSnapshot(f.root), before);
 });
-test('dashboard HTTP refuses mutations, foreign requests, raw paths and unsafe assets', async t => {
+test('dashboard HTTP refuses writes outside the change routes, foreign requests, raw paths and unsafe assets', async t => {
   const { app } = await appFixture(t);
   for (const method of ['POST', 'PUT', 'DELETE', 'OPTIONS']) assert.equal((await request(app.url, '/api/v1/catalog', {}, method)).status, 405);
   for (const headers of [{ Host: 'evil.example' }, { Origin: 'https://evil.example' }, { Origin: 'null' }, { 'Sec-Fetch-Site': 'cross-site' }, { [API_HEADER]: '' }]) {
@@ -87,7 +87,7 @@ test('reader discards an idle worker that exits and starts a fresh one', async t
   await new Promise(resolve => reader.worker.once('exit', resolve));
   assert.equal(reader.worker, null);
   reader.workerFile = path.resolve(__dirname, '../dashboard/server/read-worker.js');
-  assert.equal((await reader.run('context')).readOnly, true);
+  assert.equal((await reader.run('context')).readOnly, false);
 });
 test('catalogue benchmark: 1000 candidates, ten local sources, five warm reads', t => {
   const f = fixture(t), repos = [];

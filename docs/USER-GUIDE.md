@@ -2,7 +2,7 @@
 
 This guide is for an engineer who has never used Agentforge. It explains what the tool is for, the five words you need to know, how to do the everyday jobs, and what to do when something refuses to run. Read sections 1 to 4 once; keep sections 5 onward as reference.
 
-> **Status.** Everything in this guide works today except the parts marked **[planned]**: the interactive menu (`agentforge` with no arguments), profiles, the remembered project list, and the `af-manage` harness entry. Those are the next work items; the command-line forms described alongside them already exist and are what the menu will call.
+> **Status.** Everything in this guide works today except the parts marked **[planned]**: the terminal menu (`agentforge` with no arguments), profiles, and the `af-manage` harness entry. For interactive use, the **dashboard** exists now and does what the planned menu describes, in a browser: see [DASHBOARD.md](DASHBOARD.md). The remembered project list it uses is `~/.agentforge/projects.json`.
 
 ---
 
@@ -329,7 +329,7 @@ Agentforge prefers a clear refusal to a guess. The common ones:
 | `~/.agentforge/repos/<id>/` | Git clones | Yes; `repo fetch` recreates them |
 | `~/.agentforge/merged-skills/` | The default view (links only) | Yes; `repo sync --no-fetch` recreates it |
 | `~/.agentforge/views/<profile>/` **[planned]** | Profile views | Yes; same |
-| `~/.agentforge/projects.json` **[planned]** | Remembered projects for the menu | Yes; you lose the list, not the projects |
+| `~/.agentforge/projects.json` | Projects remembered by the dashboard | Yes; you lose the list, not the projects |
 | `<project>/<dot>/skills` | A link (or, with `copy`, a copy) | Yes; `link` recreates it |
 | `<project>/CLAUDE.md` etc. | Yours after the first write | **No** |
 

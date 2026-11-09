@@ -21,6 +21,20 @@ test('computeView: vault wins collisions unless forced; external-external first 
   assert.ok(f.entries.some((e) => e.name === 'tdd' && e.source === 'r1'));
 });
 
+test('computeView: a per-skill preference beats the default rule and --force, and stale preferences are ignored', (t) => {
+  const root = tempRoot(t);
+  const vault = makeVault(root, 'vault', ['tdd', 'diagnose']);
+  const r1 = makeVault(root, 'r1', ['tdd', 'diagnose']);
+  const repos = [{ name: 'r1', type: 'local', url_or_path: r1 }];
+  const v = computeView({ primaryRoot: vault, repos, cacheRootFor: () => '', preferences: { tdd: 'r1', diagnose: 'nobody' } });
+  const by = Object.fromEntries(v.entries.map((e) => [e.name, e.source]));
+  assert.deepEqual(by, { tdd: 'r1', diagnose: 'vault' });
+  assert.deepEqual(v.collisions.find((c) => c.name === 'tdd'), { name: 'tdd', kept: 'r1', dropped: 'vault', preferred: true });
+  const forced = computeView({ primaryRoot: vault, repos, cacheRootFor: () => '', forceExternal: true, preferences: { tdd: 'vault' } });
+  assert.equal(forced.entries.find((e) => e.name === 'tdd').source, 'vault');
+  assert.equal(forced.entries.find((e) => e.name === 'diagnose').source, 'r1');
+});
+
 test('materializeView swaps atomically and leaves link targets untouched', (t) => {
   const root = tempRoot(t);
   const v1 = makeVault(root, 'v1', ['a', 'b']);

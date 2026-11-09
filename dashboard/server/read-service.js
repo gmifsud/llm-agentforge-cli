@@ -12,6 +12,7 @@ const { inspectProject } = require('../../src/application/project');
 const { TARGETS } = require('../../src/domain/targets');
 const { samePath, isWithinLexical } = require('../../src/infra/fs-inspect');
 const { ERROR, LIMITS, ReadError } = require('./constants');
+const { loadSavedProjects, projectsFile, diffLibrary } = require('./workspace');
 
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 const nameKey = (name) => process.platform === 'win32' ? name.toLowerCase() : name;
@@ -132,17 +133,41 @@ class ReadService {
     this.paths = createPaths({ homedir, scriptDir: path.resolve(__dirname, '../..') });
     this.env = { AGENTFORGE_VAULT_ROOT: env.AGENTFORGE_VAULT_ROOT };
     this.vault = vault;
-    this.projects = [...new Set(projects.map(p => { localPath(p); return path.resolve(p); }))]
-      .map(p => ({ id: idFor('project', p), name: path.basename(p), path: p }));
+    this.sessionProjects = [...new Set(projects.map(p => { localPath(p); return path.resolve(p); }))];
+    this.projects = [];
+    this.config = {};
     this.catalog = null;
     this.documents = new Map();
     this.stale = true;
+    // Fill the list now; a corrupt projects.json is reported by context() on the first read instead.
+    try { this.loadProjects(); } catch {
+      this.projects = this.sessionProjects.map(p => ({ id: idFor('project', p), name: path.basename(p) || p, path: p, origin: 'session', local: true }));
+    }
+  }
+
+  /** Session projects (from --project) plus the saved list; re-read on every context so writes show up. */
+  loadProjects() {
+    contained(this.paths.homedir, projectsFile(this.paths));
+    const saved = loadSavedProjects(this.paths);
+    const seen = new Set(), list = [];
+    const add = (p, origin) => {
+      const k = process.platform === 'win32' ? p.toLowerCase() : p;
+      if (seen.has(k)) return; seen.add(k);
+      let local = true; try { localPath(p); } catch { local = false; }
+      list.push({ id: idFor('project', p), name: path.basename(p) || p, path: p, origin, local });
+    };
+    for (const p of this.sessionProjects) add(p, 'session');
+    for (const p of saved) add(path.resolve(p), 'saved');
+    this.projects = list;
+    return list;
   }
 
   context() {
     try {
       contained(this.paths.homedir, this.paths.configJson);
       const config = loadConfig(this.paths);
+      this.config = config;
+      this.loadProjects();
       // The core fallback probes this path with existsSync, which follows links.
       if (!this.vault && !this.env.AGENTFORGE_VAULT_ROOT && !config.vaultRoot) {
         localPath(this.paths.mergedSkills);
@@ -152,7 +177,7 @@ class ReadService {
       const primaryRoot = resolvePrimarySource(args);
       const deployment = resolveDeployRoot(args);
       localPath(primaryRoot); localPath(deployment.root);
-      return { readOnly: true, platform: process.platform, projects: this.projects, primaryRoot, deployment };
+      return { readOnly: false, platform: process.platform, projects: this.projects, primaryRoot, deployment, library: this.paths.mergedSkills };
     } catch (e) { throw this.configError(e); }
   }
 
@@ -185,7 +210,7 @@ class ReadService {
     const sources = [], skills = [], rejected = [], observations = new Map(), documents = new Map();
     const warnings = [...context.deployment.warnings];
     for (const def of definitions) {
-      const source = { id: idFor(def.kind, def.name, def.root), name: def.name, kind: def.kind,
+      const source = { id: idFor(def.kind, def.name, def.root), key: def.kind === 'primary' ? 'vault' : def.name, name: def.name, kind: def.kind,
         root: def.root, location: def.location, state: 'available', revision: null, count: null, rejectionCount: 0, error: null };
       sources.push(source);
       try {
@@ -219,11 +244,12 @@ class ReadService {
       }
       if (skills.length > LIMITS.candidates) throw new ReadError(ERROR.LIMIT, `Catalogue exceeds ${LIMITS.candidates} candidates.`);
     }
-    let winnerIds = [], collisions = [];
+    let winnerIds = [], collisions = [], library = null;
+    const preferences = this.config.preferences && typeof this.config.preferences === 'object' ? this.config.preferences : {};
     // A missing source cannot be treated as an intentionally empty contribution.
     const mergeAvailable = sources.every(s => s.state === 'available');
     if (mergeAvailable) {
-      const view = computeView({ primaryRoot: context.primaryRoot, repos,
+      const view = computeView({ primaryRoot: context.primaryRoot, repos, preferences,
         cacheRootFor: repo => sourceRootFor(this.paths, repo), forceExternal: false,
         discover: (root, opts) => observations.get((opts?.manifest === false ? sources[0] : sources.find(s => s.kind !== 'primary' && s.root === root)).id),
       });
@@ -236,13 +262,26 @@ class ReadService {
       for (const winnerId of winnerIds) {
         const winner = documents.get(winnerId);
         const candidates = skills.filter(s => nameKey(s.name) === nameKey(winner.name)).map(s => s.id);
-        if (candidates.length > 1) collisions.push({ name: winner.name, winnerId, candidateIds: candidates });
+        const prefKey = Object.keys(preferences).find(k => nameKey(k) === nameKey(winner.name));
+        const preferredSource = prefKey ? sources.find(s => s.key === preferences[prefKey]) : null;
+        if (candidates.length > 1) collisions.push({ name: winner.name, winnerId, candidateIds: candidates, preferredSourceId: preferredSource ? preferredSource.id : null });
       }
+      contained(this.paths.homedir, this.paths.mergedSkills);
+      library = { path: this.paths.mergedSkills, ...diffLibrary(this.paths.mergedSkills, view.entries) };
     } else warnings.push('Merge preview unavailable: one or more source folders could not be inspected.');
+    if (!library) {
+      contained(this.paths.homedir, this.paths.mergedSkills);
+      const d = diffLibrary(this.paths.mergedSkills, []);
+      library = { path: this.paths.mergedSkills, built: d.built, builtAt: d.builtAt, invalid: d.invalid, size: d.size, add: [], remove: [], change: [], inSync: null };
+    }
     skills.sort((a, b) => compare(a.name, b.name) || compare(a.sourceId, b.sourceId) || compare(a.relativePath, b.relativePath));
+    const projects = this.projects.map(p => {
+      try { return this.project(p.id, context); }
+      catch (e) { return { project: p, readAt: new Date().toISOString(), deployment: context.deployment, targets: [], state: 'unreadable', warnings: [e instanceof ReadError ? e.message : 'Project could not be inspected.'] }; }
+    });
     const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
       status: sources.some(s => s.state !== 'available') || rejected.length ? 'partial' : 'complete',
-      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable };
+      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects };
     this.documents = documents; this.catalog = catalog; this.stale = false;
     return catalog;
   }
@@ -263,13 +302,18 @@ class ReadService {
     }
   }
 
-  project(id) {
+  project(id, context) {
+    const { deployment, primaryRoot } = context || this.context();
     const project = this.projects.find(p => p.id === id);
     if (!project) throw new ReadError(ERROR.NOT_FOUND, 'Project not configured for this session.', 404);
-    const { deployment } = this.context();
-    const state = availability(project.path);
+    if (!project.local) {
+      return { project, readAt: new Date().toISOString(), deployment, targets: [], state: 'unreadable', warnings: ['Network and WSL folders are outside this local session.'] };
+    }
+    let state;
+    try { state = availability(project.path); } catch { state = 'unreadable'; }
     const result = { project, readAt: new Date().toISOString(), deployment, targets: [], state, warnings: [] };
-    if (state !== 'available') { result.warnings.push('Project folder is missing or unreadable.'); return result; }
+    if (state !== 'available') { result.warnings.push(state === 'missing' ? 'This folder no longer exists.' : 'This folder could not be read.'); return result; }
+    const library = this.paths.mergedSkills;
     // InspectProject follows target links; validate their local boundaries first.
     for (const target of Object.values(TARGETS)) {
       localPath(path.join(project.path, target.doc));
@@ -284,8 +328,17 @@ class ReadService {
       try { docExists = fs.statSync(path.join(project.path, t.doc)).isFile(); } catch { /* absence is reported */ }
       const readable = t.link.kind === 'directory' || (t.link.kind === 'link' && !t.link.broken)
         ? availability(path.join(project.path, t.dir, 'skills')) === 'available' : true;
-      return { id: t.id, doc: t.doc, docExists,
-        kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null,
+      // What a working link feeds the agent: the library (all sources), the vault alone, or something else.
+      let feeds = 'none';
+      if (t.link.kind === 'link' && t.link.broken) feeds = 'broken';
+      else if (t.link.kind === 'link' && readable) {
+        feeds = samePath(t.link.resolvedTarget, library) ? 'library' : samePath(t.link.resolvedTarget, primaryRoot) ? 'vault' : 'elsewhere';
+      } else if (t.link.kind === 'directory') feeds = 'copy';
+      else if (t.link.kind === 'file') feeds = 'blocked';
+      else if (!readable) feeds = 'unreadable';
+      return { id: t.id, dir: t.dir, doc: t.doc, docExists,
+        kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null, feeds,
+        entries: t.link.kind === 'directory' ? t.link.entries.length : null,
         match: t.link.kind === 'link' && !t.link.broken && readable && libraryState === 'available'
           ? (samePath(t.link.resolvedTarget, deployment.root) ? 'matches' : 'differs') : 'unknown' };
     });

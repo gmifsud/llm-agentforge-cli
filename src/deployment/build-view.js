@@ -10,12 +10,17 @@ const { refused } = require('../domain/errors');
  * Compute the merged view: one link per exported skill name.
  * Pure: reads sources, returns { entries, collisions, rejected }.
  *   entries:    [{ name, source, absolutePath }]
- *   collisions: [{ name, kept, dropped }]
+ *   collisions: [{ name, kept, dropped, preferred? }]
+ *
+ * preferences: { "<skill name>": "<source name>" | "vault" } picks the winner of
+ * one collision. It beats the default rule and --force; a preference naming a
+ * source that does not provide the skill is ignored.
  */
-function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, discover = discoverSkills }) {
+function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, discover = discoverSkills, preferences = {} }) {
   const entries = new Map();
   const collisions = [];
   const rejected = [];
+  const prefer = new Map(Object.entries(preferences || {}).map(([n, s]) => [key(n), s]));
 
   const primary = discover(primaryRoot, { maxDepth: 1, manifest: false });
   rejected.push(...primary.rejected.map((r) => ({ source: 'vault', ...r })));
@@ -29,12 +34,19 @@ function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, 
     for (const s of found.skills) {
       const k = key(s.name);
       const existing = entries.get(k);
-      if (!existing) { entries.set(k, { name: s.name, source: repo.name, absolutePath: s.absolutePath }); continue; }
-      if (existing.source === 'vault' && forceExternal) {
-        collisions.push({ name: s.name, kept: repo.name, dropped: 'vault' });
-        entries.set(k, { name: s.name, source: repo.name, absolutePath: s.absolutePath });
+      const incoming = { name: s.name, source: repo.name, absolutePath: s.absolutePath };
+      if (!existing) { entries.set(k, incoming); continue; }
+      const pref = prefer.get(k);
+      let incomingWins;
+      if (pref === repo.name) incomingWins = true;
+      else if (pref === existing.source) incomingWins = false;
+      else incomingWins = existing.source === 'vault' && forceExternal;
+      const preferred = pref === repo.name || pref === existing.source;
+      if (incomingWins) {
+        collisions.push({ name: s.name, kept: repo.name, dropped: existing.source, ...(preferred ? { preferred: true } : {}) });
+        entries.set(k, incoming);
       } else {
-        collisions.push({ name: s.name, kept: existing.source, dropped: repo.name });
+        collisions.push({ name: s.name, kept: existing.source, dropped: repo.name, ...(preferred ? { preferred: true } : {}) });
       }
     }
   }

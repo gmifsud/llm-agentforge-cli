@@ -1,16 +1,37 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, computed } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { Store } from './store';
+import { Tray } from './tray';
 
-@Component({ selector: 'af-root', imports: [RouterLink, RouterLinkActive, RouterOutlet, DatePipe], template: `
+@Component({ selector: 'af-root', imports: [RouterLink, RouterLinkActive, RouterOutlet, DatePipe, Tray], template: `
   <a class="skip-link" href="#main">Skip to content</a>
-  <header class="topbar"><a routerLink="/sources" class="brand">agentforge</a><span>Skill workspace</span><span class="mode">Local / read-only</span></header>
-  <div class="shell"><nav aria-label="Workspace"><a routerLink="/sources" routerLinkActive="active" ariaCurrentWhenActive="page">Sources</a><a routerLink="/skills" routerLinkActive="active" ariaCurrentWhenActive="page">Skills</a><a routerLink="/projects" routerLinkActive="active" ariaCurrentWhenActive="page">Projects</a><p class="nav-note">Inspect local files.<br>No changes applied.</p></nav>
-  <main id="main" tabindex="-1"><div class="refresh-bar"><span role="status">@if(s.busy()){Reading local folders…} @else if(s.catalog(); as c){Observed {{c.completedAt | date:'mediumTime'}} · {{c.status}} } @else {No local observation yet}</span><button (click)="s.refresh()" [disabled]="s.busy() || s.documentBusy() || s.projectBusy()">Refresh local data</button></div>
-    @if(s.error()){<div class="notice error" role="alert">{{s.error()}} @if(s.catalog()){<strong>Showing stale data. Document reads are paused until refresh succeeds.</strong>}</div>}
-    @for(warning of s.catalog()?.warnings || []; track $index){<p class="notice">{{warning}}</p>}
+  <header class="masthead">
+    <a routerLink="/" class="wordmark">agentforge</a>
+    <nav aria-label="Pages">
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" ariaCurrentWhenActive="page">Wiring</a>
+      <a routerLink="/library" routerLinkActive="active" ariaCurrentWhenActive="page">Skills</a>
+    </nav>
+    <p class="observed" role="status">
+      @if (s.busy()) { Reading your folders… }
+      @else if (s.catalog(); as c) { Checked at {{ c.completedAt | date:'shortTime' }} }
+    </p>
+    <button type="button" class="quiet" (click)="s.refresh()" [disabled]="s.busy() || s.applying()">Refresh</button>
+  </header>
+  <main id="main" tabindex="-1" [class.with-tray]="s.tray().length || s.results()" [class.tray-open]="s.trayOpen()">
+    @if (s.error()) {
+      <div class="notice fault" role="alert">{{ s.error() }} @if (s.catalog()) { <strong>What you see may be out of date.</strong> }</div>
+    }
+    @if (warnings().length) {
+      <ul class="notices">@for (w of warnings(); track $index) { <li class="notice">{{ w }}</li> }</ul>
+    }
     <router-outlet />
-  </main></div><footer>Agent Forge M1 <span>Local observations are not pinned revisions or runtime compatibility checks.</span></footer>
+  </main>
+  <af-tray />
 ` })
-export class App implements OnInit { s = inject(Store); ngOnInit() { void this.s.start(); } }
+export class App implements OnInit {
+  s = inject(Store);
+  /** Library and source warnings that are already shown on the board are not repeated here. */
+  warnings = computed(() => (this.s.catalog()?.warnings || []).filter(w => !/^Merge preview unavailable|^Local revision unavailable/.test(w)));
+  ngOnInit() { void this.s.start(); }
+}

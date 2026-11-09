@@ -18,6 +18,7 @@ function syncView({ paths, env, cliVault, forceExternal = false, fetch = true, d
     repos: registry.repositories,
     cacheRootFor: (repo) => cacheRootFor(paths, repo),
     forceExternal,
+    preferences: config.preferences,
   });
   const result = { primaryRoot, viewDir: paths.mergedSkills, fetch: fetchResults, view };
   if (!dryRun) result.linked = materializeView(paths.mergedSkills, view.entries).linked;
