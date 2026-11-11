@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { inspectDestination, samePath, IS_WIN } = require('../infra/fs-inspect');
 const { renderTemplateFile } = require('../render-template');
+const { markerPath, fingerprint, readMarker } = require('./copy-state');
 
 /**
  * Planning is read-only. A plan is data: { target, actions[], conflicts[], notes[] }.
@@ -14,6 +15,7 @@ const { renderTemplateFile } = require('../render-template');
  *   create-link       { destination, source, linkType: 'junction' | 'symlink' }
  *   copy-directory    { destination, source }
  *   copy-entries      { destination, source, entries: string[] }   // merge missing entries only
+ *   refresh-copy      { destination, source, managed: string[], entries: string[], marker }  // replace what we copied, keep the rest
  *   remove-link       { destination, expectedTarget }               // link only, never recursive
  *   remove-directory  { destination }                               // ordinary directory only
  *   append-gitignore  { destination, lines: string[] }
@@ -53,9 +55,14 @@ function planDoc(plan, { projectRoot, target, templatesDir, vars, force }) {
  *   ordinary directory       → preserve: copy missing entries; --force --no-preserve: replace
  *   file                     → conflict
  * `none` returns before any inspection so it can never mutate.
+ *
+ * Copy mode (asked for, or required because the tool ignores links) records what
+ * was copied in a marker beside the folder, so a later run can tell a stale copy
+ * from a fresh one and refresh only the entries it put there.
  */
-function planSkillsLink(plan, { projectRoot, target, vaultRoot, linkType, preserve = true, force = false, platform = process.platform }) {
-  const effectiveType = resolveLinkType(linkType, platform);
+function planSkillsLink(plan, { projectRoot, target, vaultRoot, linkType, preserve = true, force = false, platform = process.platform, copy = false }) {
+  const requested = resolveLinkType(linkType, platform);
+  const effectiveType = requested !== 'none' && (copy || target.copyOnly) ? 'copy' : requested;
   const dotDir = path.join(projectRoot, target.dir);
   const linkPath = path.join(dotDir, 'skills');
 
@@ -72,9 +79,10 @@ function planSkillsLink(plan, { projectRoot, target, vaultRoot, linkType, preser
 
   if (inspectDestination(dotDir).kind === 'missing') plan.actions.push({ kind: 'mkdir', destination: dotDir });
 
+  const markerFor = (fp = fingerprint(vaultRoot)) => ({ file: markerPath(dotDir), data: { mode: 'copy', source: vaultRoot, fingerprint: fp.fingerprint, names: fp.names } });
   const createAction = () =>
     effectiveType === 'copy'
-      ? { kind: 'copy-directory', destination: linkPath, source: vaultRoot }
+      ? { kind: 'copy-directory', destination: linkPath, source: vaultRoot, marker: markerFor() }
       : { kind: 'create-link', destination: linkPath, source: vaultRoot, linkType: effectiveType };
 
   const dest = inspectDestination(linkPath);
@@ -86,6 +94,12 @@ function planSkillsLink(plan, { projectRoot, target, vaultRoot, linkType, preser
 
     case 'link': {
       if (!dest.broken && samePath(dest.resolvedTarget, vaultRoot)) {
+        if (effectiveType === 'copy') {
+          // Same source, different shape: swapping our own link for a copy needs no --force.
+          plan.actions.push({ kind: 'remove-link', destination: linkPath, expectedTarget: dest.target });
+          plan.actions.push(createAction());
+          return plan;
+        }
         plan.notes.push(`${target.dir}/skills already links to ${vaultRoot}`);
         return plan;
       }
@@ -100,6 +114,13 @@ function planSkillsLink(plan, { projectRoot, target, vaultRoot, linkType, preser
     }
 
     case 'directory': {
+      const marker = effectiveType === 'copy' ? readMarker(dotDir) : null;
+      if (marker) {
+        const fp = fingerprint(vaultRoot);
+        if (fp.fingerprint === marker.fingerprint) plan.notes.push(`${target.dir}/skills: copy is up to date`);
+        else plan.actions.push({ kind: 'refresh-copy', destination: linkPath, source: vaultRoot, managed: marker.names, entries: fp.names, marker: markerFor(fp) });
+        return plan;
+      }
       if (preserve) {
         const existing = new Set(dest.entries.map((e) => (IS_WIN ? e.toLowerCase() : e)));
         const incoming = fs.readdirSync(vaultRoot).filter((e) => !existing.has(IS_WIN ? e.toLowerCase() : e));

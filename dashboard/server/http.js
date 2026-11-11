@@ -62,11 +62,13 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
         else {
           const doc = decoded.match(/^\/api\/v1\/skills\/([a-f0-9]{64})\/document$/);
           const project = decoded.match(/^\/api\/v1\/projects\/([a-f0-9]{64})$/);
+          const cmp = decoded.match(/^\/api\/v1\/skills\/([a-f0-9]{64})\/compare\/([a-f0-9]{64})$/);
           if (doc) { operation = 'document'; args = [doc[1], url.searchParams.get('generation')]; }
+          else if (cmp) { operation = 'compare'; args = [cmp[1], cmp[2], url.searchParams.get('generation')]; }
           else if (project) { operation = 'project'; args = [project[1]]; }
           else throw new ReadError(ERROR.NOT_FOUND, 'Read endpoint not found.', 404);
         }
-        if ([...url.searchParams.keys()].some(k => operation !== 'document' || k !== 'generation')) throw new ReadError(ERROR.INVALID, 'Unsupported query parameter.', 400);
+        if ([...url.searchParams.keys()].some(k => !['document', 'compare'].includes(operation) || k !== 'generation')) throw new ReadError(ERROR.INVALID, 'Unsupported query parameter.', 400);
         if (req.method === 'HEAD') { res.writeHead(204); res.end(); return; }
         json(200, await reader.run(operation, args)); return;
       }

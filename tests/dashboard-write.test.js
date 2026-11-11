@@ -35,7 +35,11 @@ test('attach a folder, rebuild, choose a collision winner: library follows, CLI 
   const pref = apply(svc, { kind: 'library.prefer', args: { skill: 'sql-review', source: 'extra' } }, { kind: 'library.rebuild' });
   assert.deepEqual(pref.map(x => x.status), ['applied', 'applied']);
   assert.equal(fs.realpathSync(path.join(lib, 'sql-review')).toLowerCase(), path.join(extra, 'sql-review').toLowerCase());
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.homedir, '.agentforge', 'config.json'), 'utf8')), { vaultRoot: f.vault, preferences: { 'sql-review': 'extra' } });
+  const saved = JSON.parse(fs.readFileSync(path.join(f.homedir, '.agentforge', 'config.json'), 'utf8'));
+  assert.equal(saved.vaultRoot, f.vault);
+  assert.equal(saved.preferences['sql-review'].source, 'extra');
+  assert.deepEqual(Object.keys(saved.preferences['sql-review'].digests).sort(), ['extra', 'vault'], 'the choice is pinned to the content of both copies');
+  assert.match(saved.preferences['sql-review'].digests.vault, /^[a-f0-9]{64}$/);
 
   const reader = new ReadService(f.options);
   const c = reader.refresh();

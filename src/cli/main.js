@@ -17,7 +17,7 @@ const HELP = `agentforge — bootstrap a repo with a token-optimised CLAUDE.md /
 and a junction/symlink to the shared skill vault. Idempotent. Non-destructive unless --force.
 
 Usage:
-  agentforge init   [--path P] [--target claude|codex|generic|gemini|all] [--name N] [--stack S]
+  agentforge init   [--path P] [--target claude|codex|generic|gemini|cursor|antigravity|all] [--name N] [--stack S]
                     [--owner O] [--build C] [--test C] [--run C] [--vault V]
                     [--link junction|symlink|copy|none|auto] [--dry-run] [--force] [--no-preserve]
   agentforge link   [--path P] [--target T] [--vault V] [--link L] [--dry-run] [--force] [--no-preserve]
@@ -176,8 +176,8 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
   for (const t of report.targets) {
     const docMark = t.docExists ? '✓' : '·';
     const linkMark = t.link.kind === 'missing' ? '·' : t.linkHealth === 'broken' || t.linkHealth.startsWith('file') ? '✗' : '✓';
-    log.info(`${t.id.padEnd(8)}  doc:${docMark}  link:${linkMark}  ${t.link.kind === 'missing' ? '' : t.linkHealth}`);
-    if (t.link.kind === 'link') log.grey(`           ↳ ${t.link.broken ? 'BROKEN → ' : '→ '}${t.link.resolvedTarget || t.link.target}`);
+    log.info(`${t.id.padEnd(12)}  doc:${docMark}  link:${linkMark}  ${t.link.kind === 'missing' ? '' : t.linkHealth}`);
+    if (t.link.kind === 'link') log.grey(`               ↳ ${t.link.broken ? 'BROKEN → ' : '→ '}${t.link.resolvedTarget || t.link.target}`);
   }
   return report.ok ? 0 : 1;
 }
@@ -242,7 +242,11 @@ function cmdRepo(positional, { paths, env, opts, log, elog, stdout, git }) {
       if (dryRun) log.warn('Mode   : DRY RUN');
       log.raw('');
       let exit = res.fetch.length ? reportFetch(res.fetch, log, elog) : 0;
-      for (const c of res.view.collisions) log.warn(`${c.name}: kept ${c.kept}, dropped ${c.dropped}`);
+      for (const c of res.view.collisions) {
+        const why = c.by === 'choice' ? (c.stale ? 'your choice; a copy has changed since, review it' : 'your choice') : c.by === 'order' ? 'source order' : 'default order';
+        log.warn(`${c.name}: kept ${c.kept}, dropped ${c.dropped} (${why})`);
+      }
+      if (res.view.identical.length) log.grey(`${res.view.identical.length} identical ${res.view.identical.length === 1 ? 'copy' : 'copies'} collapsed: ${res.view.identical.slice(0, 6).map((c) => c.name).join(', ')}${res.view.identical.length > 6 ? '…' : ''}`);
       for (const r of res.view.rejected) log.grey(`rejected [${r.source}] ${r.path}: ${r.reason}`);
       const bySource = {};
       for (const e of res.view.entries) bySource[e.source] = (bySource[e.source] || 0) + 1;

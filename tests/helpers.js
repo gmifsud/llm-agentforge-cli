@@ -19,7 +19,9 @@ function makeVault(root, name, skills) {
   fs.mkdirSync(vault, { recursive: true });
   for (const s of skills) {
     fs.mkdirSync(path.join(vault, s), { recursive: true });
-    fs.writeFileSync(path.join(vault, s, 'SKILL.md'), `# ${s}\n`);
+    // The folder name goes into the text so that same-name skills in two fixtures really differ;
+    // byte-identical copies are (correctly) not a clash.
+    fs.writeFileSync(path.join(vault, s, 'SKILL.md'), `---\nname: ${s}\ndescription: ${s} from ${name}\n---\n# ${s}\n`);
   }
   return vault;
 }

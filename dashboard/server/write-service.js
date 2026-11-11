@@ -66,7 +66,7 @@ class WriteService {
   }
   view(config = this.config()) {
     const repos = this.registry();
-    return computeView({ primaryRoot: this.primary(config), repos, cacheRootFor: r => cacheRootFor(this.paths, r), preferences: config.preferences || {} });
+    return computeView({ primaryRoot: this.primary(config), repos, cacheRootFor: r => cacheRootFor(this.paths, r), preferences: config.preferences || {}, sourcePriority: config.sourcePriority });
   }
 
   /** Validate the change shape, then dispatch. */
@@ -178,22 +178,25 @@ class WriteService {
     const skill = str(args.skill, 'Skill', { max: 200 });
     const source = str(args.source, 'Source', { optional: true, max: 64 });
     const config = this.config();
-    const view = computeView({ primaryRoot: this.primary(config), repos: this.registry(), cacheRootFor: r => cacheRootFor(this.paths, r), preferences: {} });
-    const offered = new Set([...view.entries.filter(e => nameKey(e.name) === nameKey(skill)).map(e => e.source),
-      ...view.collisions.filter(c => nameKey(c.name) === nameKey(skill)).flatMap(c => [c.kept, c.dropped])]);
-    if (offered.size < 2) throw bad(`Only one source provides "${skill}", so there is nothing to choose.`);
-    if (source && !offered.has(source)) throw bad(`"${source}" does not provide "${skill}".`);
+    const clashOf = () => computeView({ primaryRoot: this.primary(config), repos: this.registry(), cacheRootFor: r => cacheRootFor(this.paths, r), preferences: {}, sourcePriority: config.sourcePriority })
+      .clashes.find(c => nameKey(c.name) === nameKey(skill));
+    const clash = clashOf();
+    if (!clash) throw bad(`Only one source provides "${skill}", so there is nothing to choose.`);
+    if (source && !clash.candidates.some(c => c.source === source)) throw bad(`"${source}" does not provide "${skill}".`);
     const label = s => (s === 'vault' ? 'your vault' : s);
     const lines = [source
       ? { tone: 'change', text: `Use the ${skill} from ${label(source)} in the library` }
-      : { tone: 'change', text: `Go back to the default for ${skill} (your vault wins)` }];
+      : { tone: 'change', text: `Go back to the source order for ${skill} (${label(clash.winner)} wins)` }];
+    if (source) lines.push({ tone: 'note', text: 'Your choice is tied to the current content of each copy. If one of them changes later, you will be asked to look again.' });
     lines.push({ tone: 'note', text: 'Saved in ~/.agentforge/config.json. The command line uses the same choice.' });
     return { title: `Choose ${skill}`, lines, conflicts: [], ok: true, args: { skill, source },
       run: () => {
         const fresh = this.config();
         const prefs = { ...(fresh.preferences || {}) };
         for (const k of Object.keys(prefs)) if (nameKey(k) === nameKey(skill)) delete prefs[k];
-        if (source) prefs[skill] = source;
+        // Pin the choice to the content of every candidate as it is right now (re-read at apply time).
+        const now = clashOf();
+        if (source) prefs[skill] = { source, digests: Object.fromEntries((now ? now.candidates : []).map(c => [c.source, c.digest])), chosenAt: new Date().toISOString() };
         const next = { ...fresh, preferences: prefs };
         if (!Object.keys(prefs).length) delete next.preferences;
         saveConfig(this.paths, next);
@@ -262,12 +265,12 @@ class WriteService {
     const libState = inspectDestination(library);
     const libraryReady = libState.kind === 'directory';
     if (!libraryReady) conflicts.push('The library has not been built yet. Rebuild the library first.');
-    // One plan per chosen agent; codex and generic share AGENTS.md, so only the first one writes it.
-    const chosen = libraryReady ? targets.flatMap((t, i) => planProject({
-      projectRoot: p.path, targetSelector: t, vars: buildVars({ projectRoot: p.path, env: {} }), templatesDir: this.paths.templatesDir,
-      vaultRoot: library, linkType: link, preserve: true, force: repoint, platform: process.platform,
-      withDoc: writeDocs && !targets.slice(0, i).some(prev => TARGETS[prev].doc === TARGETS[t].doc),
-    })) : [];
+    // One call for all chosen agents: the core writes a shared instruction file once and plans a shared
+    // folder once (as a copy when any agent sharing it cannot follow links).
+    const chosen = libraryReady ? planProject({
+      projectRoot: p.path, targetSelector: targets, vars: buildVars({ projectRoot: p.path, env: {} }), templatesDir: this.paths.templatesDir,
+      vaultRoot: library, linkType: link, preserve: true, force: repoint, platform: process.platform, withDoc: writeDocs,
+    }) : [];
     for (const plan of chosen) {
       const t = TARGETS[plan.target];
       for (const a of plan.actions) lines.push(describeAction(a, p.path, library, this.primary()));
@@ -294,6 +297,7 @@ function describeAction(a, root, library, vault) {
     case 'mkdir': return { tone: 'add', text: `Create the folder ${d}` };
     case 'create-link': return { tone: 'add', text: `Link ${d} to ${where(a.source, library, vault)}` };
     case 'copy-directory': return { tone: 'add', text: `Copy ${where(a.source, library, vault)} into ${d}` };
+    case 'refresh-copy': return { tone: 'change', text: `Refresh the copy in ${d} from ${where(a.source, library, vault)}. Skills you added there are kept.` };
     case 'copy-entries': return { tone: 'add', text: `Copy ${plural(a.entries.length, 'missing skill')} into ${d}, keeping the ${a.kept} already there` };
     case 'remove-link': return { tone: 'remove', text: `Unlink ${d} from ${a.expectedTarget}. That folder is not touched.` };
     case 'remove-directory': return { tone: 'remove', text: `Delete the folder ${d}` };
@@ -305,7 +309,9 @@ function humanNote(n) {
   return n.replace(/ — skipping \(use --force to overwrite\)/, ' is kept as it is')
     .replace(/already links to .*/, 'already linked to the library')
     .replace(/: preserved (\d+) existing entries; nothing to merge/, ' keeps its $1 skills; nothing missing')
-    .replace(/planned for an earlier target/, 'is written once for both agents');
+    .replace(/planned for an earlier target/, 'is written once for both agents')
+    .replace(/is shared with (\w+) and planned there/, 'is the same folder as $1; set up once')
+    .replace(/: copy is up to date/, ' is a copy and is up to date');
 }
 function humanConflict(c, repoint) {
   const r = c.reason || String(c);

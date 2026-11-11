@@ -13,6 +13,14 @@ const { TARGETS } = require('../../src/domain/targets');
 const { samePath, isWithinLexical } = require('../../src/infra/fs-inspect');
 const { ERROR, LIMITS, ReadError } = require('./constants');
 const { loadSavedProjects, projectsFile, diffLibrary } = require('./workspace');
+const { lintSkill, parseFrontmatter, findShadows, personalLevels } = require('../../src/discovery/skill-lint');
+const { estimateListing } = require('../../src/discovery/listing-budget');
+const { digestSkill } = require('../../src/discovery/skill-digest');
+const { diffLines } = require('../../src/discovery/text-diff');
+const { copyState } = require('../../src/deployment/copy-state');
+
+const COMPARE_LIMITS = Object.freeze({ maxFiles: 500, maxBytes: 5 * 1024 * 1024 });
+const RUNS_CODE = /\.(sh|bash|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|exe)$/i;
 
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 const nameKey = (name) => process.platform === 'win32' ? name.toLowerCase() : name;
@@ -244,12 +252,12 @@ class ReadService {
       }
       if (skills.length > LIMITS.candidates) throw new ReadError(ERROR.LIMIT, `Catalogue exceeds ${LIMITS.candidates} candidates.`);
     }
-    let winnerIds = [], collisions = [], library = null;
+    let winnerIds = [], collisions = [], library = null, health = null, sourceOrder = [];
     const preferences = this.config.preferences && typeof this.config.preferences === 'object' ? this.config.preferences : {};
     // A missing source cannot be treated as an intentionally empty contribution.
     const mergeAvailable = sources.every(s => s.state === 'available');
     if (mergeAvailable) {
-      const view = computeView({ primaryRoot: context.primaryRoot, repos, preferences,
+      const view = computeView({ primaryRoot: context.primaryRoot, repos, preferences, sourcePriority: this.config.sourcePriority,
         cacheRootFor: repo => sourceRootFor(this.paths, repo), forceExternal: false,
         discover: (root, opts) => observations.get((opts?.manifest === false ? sources[0] : sources.find(s => s.kind !== 'primary' && s.root === root)).id),
       });
@@ -259,13 +267,45 @@ class ReadService {
         if (!winner) throw new ReadError(ERROR.CHANGED, 'Sources changed during the merge observation. Refresh again.', 409);
         return winner.id;
       });
-      for (const winnerId of winnerIds) {
-        const winner = documents.get(winnerId);
-        const candidates = skills.filter(s => nameKey(s.name) === nameKey(winner.name)).map(s => s.id);
-        const prefKey = Object.keys(preferences).find(k => nameKey(k) === nameKey(winner.name));
-        const preferredSource = prefKey ? sources.find(s => s.key === preferences[prefKey]) : null;
-        if (candidates.length > 1) collisions.push({ name: winner.name, winnerId, candidateIds: candidates, preferredSourceId: preferredSource ? preferredSource.id : null });
+      // The primary vault is identified by its flag, never by the name "vault", which an old registry entry may also carry.
+      const sourceIdFor = c => (c.primary ? sources[0].id : sources.find(s => s.kind !== 'primary' && s.name === c.source)?.id);
+      const skillFor = c => skills.find(s => documents.get(s.id).directory === c.absolutePath && s.sourceId === sourceIdFor(c));
+      const byName = k => (k === 'vault' ? sources[0] : sources.find(s => s.kind !== 'primary' && s.name === k));
+      // Every same-name group, with why its winner won. kind is what a person needs to do about it:
+      //   identical  every copy is the same content: nothing to decide
+      //   choice     you picked one, and nothing has changed since
+      //   order      your source order settled it
+      //   default    only the built-in order settled it: worth a look
+      //   changed    you picked one, and a copy has changed (or a new one appeared) since
+      for (const clash of view.clashes) {
+        const found = clash.candidates.map(c => ({ c, skill: skillFor(c) })).filter(x => x.skill);
+        const winner = found.find(x => x.c.winner);
+        if (!winner || found.length < 2) continue;
+        for (const x of found) x.skill.digest = x.c.digest;
+        const others = found.filter(x => x !== winner);
+        const prefKey = Object.keys(preferences).find(k => nameKey(k) === nameKey(clash.name));
+        const prefValue = prefKey ? preferences[prefKey] : null;
+        const preferredSource = prefValue ? byName(typeof prefValue === 'string' ? prefValue : prefValue.source) : null;
+        collisions.push({
+          name: clash.name, winnerId: winner.skill.id, candidateIds: found.map(x => x.skill.id),
+          preferredSourceId: preferredSource ? preferredSource.id : null,
+          kind: others.every(x => x.c.identical) ? 'identical' : clash.stale ? 'changed' : clash.by,
+          by: clash.by, stale: clash.stale,
+          changedSourceIds: clash.changed.map(k => byName(k)?.id).filter(Boolean),
+          identicalIds: others.filter(x => x.c.identical).map(x => x.skill.id),
+        });
       }
+      sourceOrder = [...new Set(view.order.flatMap(k => (k === 'vault' ? sources.filter(s => s.key === 'vault') : [byName(k)]).filter(Boolean).map(s => s.id)))];
+      // Can the skills the library will hold actually be invoked? Rules, listing budget, personal skills that hide them.
+      const linted = winnerIds.map(id => ({ id, ...lintSkill(documents.get(id).directory) }));
+      const findings = linted.flatMap(l => l.findings.map(f => ({ skillId: l.id, skill: l.name, ...f })));
+      const counts = { error: 0, warn: 0, info: 0 };
+      for (const f of findings) counts[f.severity]++;
+      health = {
+        findings, counts,
+        budget: estimateListing(linted, { budgetChars: this.config.listingBudgetChars, contextTokens: this.config.contextTokens }),
+        shadows: findShadows(linted.map(l => l.name), personalLevels(this.paths.homedir)).map(s => ({ ...s, skillId: linted.find(l => l.name === s.name)?.id || null })),
+      };
       contained(this.paths.homedir, this.paths.mergedSkills);
       library = { path: this.paths.mergedSkills, ...diffLibrary(this.paths.mergedSkills, view.entries) };
     } else warnings.push('Merge preview unavailable: one or more source folders could not be inspected.');
@@ -281,9 +321,57 @@ class ReadService {
     });
     const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
       status: sources.some(s => s.state !== 'available') || rejected.length ? 'partial' : 'complete',
-      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects };
+      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder,
+      sourceOrderExplicit: Array.isArray(this.config.sourcePriority) && this.config.sourcePriority.length > 0 };
     this.documents = documents; this.catalog = catalog; this.stale = false;
     return catalog;
+  }
+
+  /**
+   * Two candidates of one skill, side by side: what differs in the frontmatter, in the
+   * instructions, and in the files they ship. Same staleness and boundary rules as document().
+   */
+  compare(idA, idB, generation) {
+    if (this.stale || !this.catalog || generation !== this.catalog.generation) throw new ReadError(ERROR.STALE, 'Refresh the catalogue before comparing.', 409);
+    if (idA === idB) throw new ReadError(ERROR.INVALID, 'Choose two different skills to compare.', 400);
+    const side = id => {
+      const entry = this.documents.get(id);
+      if (!entry) throw new ReadError(ERROR.NOT_FOUND, 'Skill not found.', 404);
+      const file = path.join(entry.directory, 'SKILL.md');
+      contained(entry.root, file);
+      if (localPath(entry.root) !== entry.physicalRoot) throw new ReadError(ERROR.CHANGED, 'The source root changed. Refresh the catalogue.', 409);
+      let text;
+      try { text = readPlainFile(entry.root, file); } catch (e) {
+        if (e instanceof ReadError) throw e;
+        throw new ReadError(ERROR.UNAVAILABLE, 'SKILL.md could not be read as UTF-8 text. Refresh and try again.');
+      }
+      const fm = parseFrontmatter(text);
+      let files = null, digest = null, changedAt = null;
+      try {
+        const d = digestSkill(entry.directory, COMPARE_LIMITS);
+        digest = d.digest;
+        let newest = 0;
+        files = d.files.map(f => {
+          if (!f.link) { try { newest = Math.max(newest, fs.statSync(path.join(entry.directory, f.path)).mtimeMs); } catch { /* raced away */ } }
+          return { path: f.path, size: f.size, link: Boolean(f.link), runs: RUNS_CODE.test(f.path) };
+        });
+        changedAt = newest ? new Date(newest).toISOString() : null;
+      } catch { /* too large to inventory: reported as unknown */ }
+      return { id, sourceId: entry.sourceId, name: entry.name, relativePath: entry.relativePath, fields: fm.fields || {}, body: fm.fields ? fm.body : text, digest, files, changedAt };
+    };
+    const a = side(idA), b = side(idB);
+    const order = ['name', 'description', 'when_to_use'];
+    const keys = [...new Set([...Object.keys(a.fields), ...Object.keys(b.fields)])].sort((x, y) => (order.indexOf(x) + 1 || 99) - (order.indexOf(y) + 1 || 99) || compare(x, y));
+    const fields = keys.map(key => ({ key, a: a.fields[key] ?? null, b: b.fields[key] ?? null, same: (a.fields[key] ?? null) === (b.fields[key] ?? null) }));
+    const names = new Set([...(a.files || []).map(f => f.path), ...(b.files || []).map(f => f.path)]);
+    const fileDiff = a.files && b.files ? [...names].sort().filter(p => p !== 'SKILL.md').map(p => {
+      const fa = a.files.find(f => f.path === p), fb = b.files.find(f => f.path === p);
+      return { path: p, inA: Boolean(fa), inB: Boolean(fb), runs: Boolean((fa || fb).runs), same: Boolean(fa && fb && fa.size === fb.size) };
+    }) : null;
+    const strip = s => ({ id: s.id, sourceId: s.sourceId, name: s.name, relativePath: s.relativePath, digest: s.digest, changedAt: s.changedAt,
+      fileCount: s.files ? s.files.length : null, scriptCount: s.files ? s.files.filter(f => f.runs).length : null });
+    return { generation, readAt: new Date().toISOString(), a: strip(a), b: strip(b), identical: Boolean(a.digest && a.digest === b.digest),
+      fields, files: fileDiff, body: diffLines(a.body, b.body) };
   }
 
   document(id, generation) {
@@ -336,7 +424,12 @@ class ReadService {
       } else if (t.link.kind === 'directory') feeds = 'copy';
       else if (t.link.kind === 'file') feeds = 'blocked';
       else if (!readable) feeds = 'unreadable';
-      return { id: t.id, dir: t.dir, doc: t.doc, docExists,
+      // A healthy link is no use to a tool that ignores links (measured: Antigravity).
+      if (t.needsCopy && (feeds === 'library' || feeds === 'vault' || feeds === 'elsewhere')) feeds = 'needs-copy';
+      // A copy made by Agentforge knows what it was copied from, so it can be told fresh from stale against the library.
+      let copy = null;
+      if (t.link.kind === 'directory') { try { const c = copyState(path.join(project.path, t.dir), library); copy = c.managed ? { state: c.state, copiedAt: c.copiedAt || null } : null; } catch { copy = null; } }
+      return { id: t.id, dir: t.dir, doc: t.doc, docExists, optIn: Boolean(t.optIn), copy,
         kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null, feeds,
         entries: t.link.kind === 'directory' ? t.link.entries.length : null,
         match: t.link.kind === 'link' && !t.link.broken && readable && libraryState === 'available'

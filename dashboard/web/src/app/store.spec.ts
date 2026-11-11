@@ -7,7 +7,7 @@ import { Library } from './library';
 
 const library = { path: 'lib', built: true, builtAt: '', invalid: false, size: 1, add: [], remove: [], change: [], inSync: true };
 const catalog: Catalog = {
-  generation: 'g1', startedAt: '', completedAt: '', status: 'complete', mergeAvailable: true, library, projects: [],
+  generation: 'g1', startedAt: '', completedAt: '', status: 'complete', mergeAvailable: true, library, projects: [], health: null, sourceOrder: ['source'], sourceOrderExplicit: false,
   sources: [{ id: 'source', key: 'vault', kind: 'primary', name: 'Primary vault', location: 'fixture', root: 'fixture', state: 'available', revision: null, count: 1, rejectionCount: 0, error: null }],
   skills: [{ id: 'skill', sourceId: 'source', name: 'test-skill', relativePath: 'test-skill' }],
   winnerIds: ['skill'], collisions: [], rejected: [], warnings: [],

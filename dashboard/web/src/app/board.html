@@ -113,7 +113,7 @@
       <span class="jack out" data-jack="lib-out"></span>
     </article>
 
-    @if (c.collisions.length) {
+    @if (realClashes().length) {
       <article class="module collisions" aria-labelledby="h-collisions">
         <h3 id="h-collisions">Same name, more than one source</h3>
         <p class="fine">The library holds one of each. Choose which one your agents get.</p>
@@ -133,8 +133,8 @@
             @if (plannedChoice(col.name)) { <p class="planned-note">Changes when you apply</p> }
           </fieldset>
         }
-        @if (c.collisions.length > 5) {
-          <button type="button" class="quiet" (click)="showAllCollisions.set(!showAllCollisions())">{{ showAllCollisions() ? 'Show fewer' : 'Show all ' + c.collisions.length }}</button>
+        @if (realClashes().length > 5) {
+          <button type="button" class="quiet" (click)="showAllCollisions.set(!showAllCollisions())">{{ showAllCollisions() ? 'Show fewer' : 'Show all ' + realClashes().length }}</button>
         }
       </article>
     }

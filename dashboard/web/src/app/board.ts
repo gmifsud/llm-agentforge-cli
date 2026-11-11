@@ -10,6 +10,7 @@ const FEEDS: Record<Feeds, { text: string; tone: 'live' | 'caution' | 'fault' | 
   elsewhere: { text: 'Reads another folder', tone: 'caution' },
   broken: { text: 'Link is broken', tone: 'fault' },
   copy: { text: 'Has its own copy', tone: 'muted' },
+  'needs-copy': { text: 'Linked, but this tool needs a copy', tone: 'caution' },
   blocked: { text: 'A file is in the way', tone: 'fault' },
   unreadable: { text: 'Cannot be read', tone: 'fault' },
   none: { text: 'Not wired', tone: 'muted' },
@@ -48,10 +49,12 @@ export class Board implements OnInit, OnDestroy {
   // Collisions
   showAllCollisions = signal(false);
   collisions = computed(() => {
-    const all = this.s.catalog()?.collisions || [];
+    const all = this.realClashes();
     return this.showAllCollisions() ? all : all.slice(0, 5);
   });
 
+  /** Identical copies are not a decision, so they never get a row. */
+  realClashes = computed(() => (this.s.catalog()?.collisions || []).filter(c => c.kind !== 'identical'));
   pendingAttach = computed(() => this.s.tray().filter(i => i.change.kind === 'source.attach'));
   pendingProjects = computed(() => this.s.tray().filter(i => i.change.kind === 'project.add'));
 

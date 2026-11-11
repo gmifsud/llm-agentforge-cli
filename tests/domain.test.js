@@ -50,8 +50,10 @@ test('args: repo subcommand keeps positionals and rejects unknown options', () =
   assert.throws(() => parseArgs(['init', '--path']), { exitCode: 2 });
 });
 
-test('targets: all expands to every id, unknown is a usage error', () => {
-  assert.deepEqual(resolveTargets('all').map((t) => t.id), TARGET_IDS);
+test('targets: all means every target that is not opt-in; unknown is a usage error', () => {
+  assert.deepEqual(resolveTargets('all').map((t) => t.id), ['claude', 'codex', 'generic', 'gemini']);
+  assert.deepEqual(TARGET_IDS, ['claude', 'codex', 'generic', 'gemini', 'cursor', 'antigravity']);
+  assert.deepEqual(resolveTargets(['claude', 'antigravity', 'claude']).map((t) => t.id), ['claude', 'antigravity'], 'a list, without repeats');
   assert.equal(resolveTargets(undefined)[0].id, 'claude');
-  assert.throws(() => resolveTargets('cursor'), { exitCode: 2 });
+  assert.throws(() => resolveTargets('windsurf'), { exitCode: 2 });
 });

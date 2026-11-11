@@ -18,7 +18,8 @@ const STAGE: Record<ChangeKind, number> = {
 
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
 
-export const AGENTS: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', generic: 'Cursor and others', gemini: 'Gemini CLI' };
+/** Names people know the tools by. `generic` is the shared .agents folder that Codex, Gemini, Cursor and Antigravity all read. */
+export const AGENTS: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', generic: 'Shared .agents folder', gemini: 'Gemini CLI', cursor: 'Cursor', antigravity: 'Antigravity' };
 
 @Injectable({ providedIn: 'root' })
 export class Store {

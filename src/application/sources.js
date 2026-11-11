@@ -23,6 +23,7 @@ function addSource({ paths, urlOrPath, name, branch }) {
   if (!urlOrPath) throw usage('repo add <url-or-path> is required');
   const type = isGitUrl(urlOrPath) ? 'git' : 'local';
   const id = validateSourceId(name || deriveSourceId(urlOrPath));
+  if (id.toLowerCase() === 'vault') throw usage('"vault" is reserved for your primary vault; give this source another name with --name');
   if (branch !== undefined && branch !== null) {
     if (typeof branch !== 'string' || branch.length === 0 || branch.startsWith('-')) throw usage(`invalid branch "${branch}"`);
   }

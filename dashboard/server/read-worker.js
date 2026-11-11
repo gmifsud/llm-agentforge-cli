@@ -10,6 +10,7 @@ parentPort.on('message', ({ operation, args = [] }) => {
       case 'context': data = service.context(); break;
       case 'catalog': data = service.refresh(); break;
       case 'document': data = service.document(...args); break;
+      case 'compare': data = service.compare(...args); break;
       case 'project': data = service.project(...args); break;
       default: throw new ReadError(ERROR.INVALID, 'Unknown read operation.', 400);
     }

@@ -43,6 +43,27 @@ function applyPlan(plan, { dryRun = false } = {}) {
       case 'copy-directory': {
         if (inspectDestination(a.destination).kind !== 'missing') throw refused('STALE_PLAN', `${a.destination} appeared since planning`);
         fs.cpSync(a.source, a.destination, { recursive: true, dereference: true });
+        if (a.marker) writeMarker(a.marker);
+        break;
+      }
+
+      case 'refresh-copy': {
+        const st = inspectDestination(a.destination);
+        if (st.kind !== 'directory') throw refused('STALE_PLAN', `${a.destination} is no longer an ordinary directory (${st.kind}); refusing to refresh`);
+        // Remove only what a previous copy put there; anything else in the folder is the user's.
+        for (const name of a.managed) {
+          if (/[\\/]/.test(name) || name === '..' || name === '.') continue;
+          const p = path.join(a.destination, name);
+          const es = inspectDestination(p);
+          if (es.kind === 'directory') fs.rmSync(p, { recursive: true, force: true });
+          else if (es.kind === 'link') removeLinkOnly(p);
+        }
+        for (const name of a.entries) {
+          const dest = path.join(a.destination, name);
+          if (inspectDestination(dest).kind !== 'missing') { skipped.push({ kind: a.kind, destination: dest, reason: 'yours, not replaced' }); continue; }
+          fs.cpSync(path.join(a.source, name), dest, { recursive: true, dereference: true });
+        }
+        writeMarker(a.marker);
         break;
       }
 
@@ -96,6 +117,10 @@ function applyPlan(plan, { dryRun = false } = {}) {
   return { applied, skipped };
 }
 
+function writeMarker(marker) {
+  fs.writeFileSync(marker.file, JSON.stringify({ ...marker.data, copiedAt: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+}
+
 /** Human-readable one-liner per action, for previews and dry runs. */
 function describeAction(a) {
   switch (a.kind) {
@@ -103,6 +128,7 @@ function describeAction(a) {
     case 'mkdir': return `mkdir ${a.destination}`;
     case 'create-link': return `${a.linkType}: ${a.destination} -> ${a.source}`;
     case 'copy-directory': return `copy ${a.source} -> ${a.destination}`;
+    case 'refresh-copy': return `refresh the copy in ${a.destination} from ${a.source} (${a.entries.length} skills; yours are kept)`;
     case 'copy-entries': return `merge ${a.entries.length} missing entr${a.entries.length === 1 ? 'y' : 'ies'} into ${a.destination} (keeping ${a.kept})`;
     case 'remove-link': return `remove link ${a.destination} (-> ${a.expectedTarget})`;
     case 'remove-directory': return `remove directory ${a.destination}`;
