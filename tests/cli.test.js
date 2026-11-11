@@ -49,6 +49,42 @@ test('init --dry-run writes nothing; init writes doc, link and gitignore; doctor
   assert.equal(report.targets.find((x) => x.id === 'claude').linkHealth, 'link');
 });
 
+test('doctor reports whether skills can be invoked: rule problems, listing budget, personal shadowing', (t) => {
+  const root = tempRoot(t);
+  const home = path.join(root, 'home'); fs.mkdirSync(home);
+  const vault = path.join(root, 'vault');
+  const write = (dir, text) => { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'SKILL.md'), text); };
+  write(path.join(vault, 'good'), `---\nname: good\ndescription: ${'d'.repeat(60)}\n---\n`);
+  write(path.join(vault, 'wrong-folder'), '---\nname: something-else\ndescription: d\n---\n');
+  write(path.join(vault, 'tdd'), `---\nname: tdd\ndescription: ${'d'.repeat(60)}\n---\n`);
+  write(path.join(home, '.claude', 'skills', 'tdd'), '---\nname: tdd\ndescription: mine\n---\n');
+  fs.mkdirSync(path.join(home, '.agentforge'));
+  fs.writeFileSync(path.join(home, '.agentforge', 'config.json'), JSON.stringify({ listingBudgetChars: 100 }));
+
+  const json = JSON.parse(cli(['doctor', '--path', root, '--vault', vault, '--json'], { home }).out);
+  assert.equal(json.library.skills, 3);
+  assert.deepEqual(json.library.findings.map((f) => `${f.skill}:${f.code}`), ['something-else:NAME_MISMATCH']);
+  assert.deepEqual({ fits: json.library.budget.fits, dropped: json.library.budget.dropped }, { fits: false, dropped: 1 });
+  assert.deepEqual(json.library.shadows.map((s) => `${s.tool}:${s.name}`), ['claude:tdd']);
+
+  const text = cli(['doctor', '--path', root, '--vault', vault], { home });
+  assert.equal(text.code, 0, 'health findings inform; they do not fail doctor');
+  assert.match(text.out, /1 will not load in some tools/);
+  assert.match(text.out, /at least 1 of 3 descriptions will not be shown/);
+  assert.match(text.out, /tdd: your personal claude skill .* takes precedence/);
+});
+
+test('doctor counts a vault that mixes ordinary skill folders with a linked one', (t) => {
+  const root = tempRoot(t);
+  const home = path.join(root, 'home'); fs.mkdirSync(home);
+  const vault = makeVault(root, 'vault', ['a', 'b']);
+  const elsewhere = makeVault(root, 'elsewhere', ['linked-skill']);
+  mkLink(path.join(elsewhere, 'linked-skill'), path.join(vault, 'linked-skill'));
+  const report = JSON.parse(cli(['doctor', '--path', root, '--vault', vault, '--json'], { home }).out);
+  assert.equal(report.vault.skills, 3, 'two folders plus one link, not just the link');
+  assert.equal(report.vault.viewLinks, 1);
+});
+
 test('link into a project already linked to another vault exits 3 and changes nothing', (t) => {
   const root = tempRoot(t);
   const home = path.join(root, 'home'); fs.mkdirSync(home);

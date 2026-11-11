@@ -61,13 +61,14 @@ function inspectProject({ projectRoot, vaultRoot, checkRead = () => {} }) {
     const d = discoverSkills(vaultRoot, { maxDepth: 1, manifest: false, checkRead });
     vault.skills = d.skills.length;
     vault.rejected = d.rejected.filter((r) => r.reason !== 'symbolic link skipped during scan').length;
-    // A merged view is a directory of links; count those too.
+    // Entries that are links also count: a merged view is all links, and a vault may hold a few.
+    // They are added to the ordinary skill folders, never substituted for them.
     if (vaultState.kind === 'directory') {
       const links = vaultState.entries.filter((e) => { checkRead(path.join(vaultRoot, e)); return inspectDestination(path.join(vaultRoot, e)).kind === 'link'; });
       if (links.length > 0) {
-        vault.skills = links.filter((e) => { checkRead(path.join(vaultRoot, e, 'SKILL.md')); return fs.existsSync(path.join(vaultRoot, e, 'SKILL.md')); }).length;
+        const linked = links.filter((e) => { checkRead(path.join(vaultRoot, e, 'SKILL.md')); return fs.existsSync(path.join(vaultRoot, e, 'SKILL.md')); }).length;
+        vault.skills += linked;
         vault.viewLinks = links.length;
-        vault.rejected = 0;
       }
     }
   }

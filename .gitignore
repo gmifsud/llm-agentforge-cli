@@ -17,3 +17,5 @@ dashboard/web/dist/
 dashboard/web/.angular/
 dashboard/web/test-results/
 dashboard/web/playwright-report/
+
+package-lock.json

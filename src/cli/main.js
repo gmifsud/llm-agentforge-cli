@@ -8,6 +8,7 @@ const { AgentforgeError } = require('../domain/errors');
 const { createPaths, loadConfig, resolveDeployRoot } = require('../infra/paths');
 const { createGit } = require('../infra/git');
 const { buildVars, planProject, inspectProject } = require('../application/project');
+const { inspectLibrary } = require('../application/health');
 const { applyPlan, describeAction } = require('../deployment/apply');
 const { addSource, removeSource, listSources, fetchSources } = require('../application/sources');
 const { syncView } = require('../application/sync');
@@ -155,6 +156,7 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
   const report = inspectProject({ projectRoot, vaultRoot });
   report.vaultOrigin = origin;
   report.warnings = warnings;
+  report.library = report.vault.ok ? inspectLibrary({ root: vaultRoot, homedir: paths.homedir, config }) : null;
 
   if (opts.json) { stdout.write(JSON.stringify(report, null, 2) + '\n'); return report.ok ? 0 : 1; }
 
@@ -165,10 +167,12 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
   for (const w of warnings) log.warn(w);
   log.raw('');
   if (report.vault.ok) {
-    const extra = report.vault.viewLinks !== undefined ? ` via ${report.vault.viewLinks} view links` : '';
+    const extra = report.vault.viewLinks !== undefined ? `, ${report.vault.viewLinks} of them through links` : '';
     log.ok(`vault present (${report.vault.skills} skills with SKILL.md${extra}${report.vault.rejected ? `, ${report.vault.rejected} entries without` : ''})`);
   } else elog.err(`vault not usable: ${report.vault.state}`);
 
+  if (report.library) printLibraryHealth(report.library, log);
+  log.raw('');
   for (const t of report.targets) {
     const docMark = t.docExists ? '✓' : '·';
     const linkMark = t.link.kind === 'missing' ? '·' : t.linkHealth === 'broken' || t.linkHealth.startsWith('file') ? '✗' : '✓';
@@ -176,6 +180,22 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
     if (t.link.kind === 'link') log.grey(`           ↳ ${t.link.broken ? 'BROKEN → ' : '→ '}${t.link.resolvedTarget || t.link.target}`);
   }
   return report.ok ? 0 : 1;
+}
+
+/** Whether the skills can actually be invoked: rule problems, listing budget, and personal skills that hide linked ones. */
+function printLibraryHealth(lib, log) {
+  const problems = lib.findings.filter((f) => f.severity !== 'info');
+  if (problems.length === 0) log.ok(`skill rules: no problems in ${lib.skills} skills`);
+  else {
+    log.warn(`skill rules: ${lib.counts.error} will not load in some tools, ${lib.counts.warn} degraded`);
+    for (const f of problems.slice(0, 8)) log.grey(`${f.severity === 'error' ? '✗' : '!'} ${f.message} [${f.tools.join(', ')}]`);
+    if (problems.length > 8) log.grey(`… and ${problems.length - 8} more (use --json for all)`);
+  }
+  const b = lib.budget;
+  const size = `${b.descriptionChars.toLocaleString('en-US')} description characters against a listing budget of about ${b.budgetChars.toLocaleString('en-US')}`;
+  if (b.fits) log.ok(`listing: ${size}; every description fits`);
+  else log.warn(`listing: ${size}; at least ${b.dropped} of ${b.entries} descriptions will not be shown to the agent (calling a skill by name still works)`);
+  for (const s of lib.shadows) log.warn(`${s.name}: your ${s.level} ${s.tool} skill at ${s.path} takes precedence over the linked one`);
 }
 
 // ─── repo ────────────────────────────────────────────────────────────────────
