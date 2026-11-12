@@ -12,7 +12,7 @@ const { inspectProject } = require('../../src/application/project');
 const { TARGETS } = require('../../src/domain/targets');
 const { samePath, isWithinLexical } = require('../../src/infra/fs-inspect');
 const { ERROR, LIMITS, ReadError } = require('./constants');
-const { loadSavedProjects, projectsFile, diffLibrary } = require('./workspace');
+const { loadSavedProjects, projectsFile, diffLibrary, loadVerifications, verificationFor, verificationsFile, skillsBasis } = require('./workspace');
 const { lintSkill, parseFrontmatter, findShadows, personalLevels } = require('../../src/discovery/skill-lint');
 const { estimateListing } = require('../../src/discovery/listing-budget');
 const { digestSkill } = require('../../src/discovery/skill-digest');
@@ -402,6 +402,8 @@ class ReadService {
     const result = { project, readAt: new Date().toISOString(), deployment, targets: [], state, warnings: [] };
     if (state !== 'available') { result.warnings.push(state === 'missing' ? 'This folder no longer exists.' : 'This folder could not be read.'); return result; }
     const library = this.paths.mergedSkills;
+    contained(this.paths.homedir, verificationsFile(this.paths));
+    const verifications = loadVerifications(this.paths);
     // InspectProject follows target links; validate their local boundaries first.
     for (const target of Object.values(TARGETS)) {
       localPath(path.join(project.path, target.doc));
@@ -429,7 +431,10 @@ class ReadService {
       // A copy made by Agentforge knows what it was copied from, so it can be told fresh from stale against the library.
       let copy = null;
       if (t.link.kind === 'directory') { try { const c = copyState(path.join(project.path, t.dir), library); copy = c.managed ? { state: c.state, copiedAt: c.copiedAt || null } : null; } catch { copy = null; } }
-      return { id: t.id, dir: t.dir, doc: t.doc, docExists, optIn: Boolean(t.optIn), copy,
+      // What the tool itself last reported, and whether the folder has changed since.
+      const stored = verificationFor(verifications, project.path, t.id);
+      const verification = stored ? { level: stored.level, tool: stored.tool, detail: stored.detail, at: stored.at, stale: stored.basis !== skillsBasis(path.join(project.path, t.dir)) } : null;
+      return { id: t.id, dir: t.dir, doc: t.doc, docExists, optIn: Boolean(t.optIn), copy, verification,
         kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null, feeds,
         entries: t.link.kind === 'directory' ? t.link.entries.length : null,
         match: t.link.kind === 'link' && !t.link.broken && readable && libraryState === 'available'

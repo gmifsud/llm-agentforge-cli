@@ -188,13 +188,18 @@
           @if (!shown(report).length) { <p class="state muted">No agents read skills here yet.</p> }
           <ul class="agents">
             @for (t of shown(report); track t.id) {
-              <li [class]="'agent ' + state(t).tone" [class.planned]="plannedFor(report.project.id, t.id)" [class.copied]="t.feeds === 'copy'">
+              <li [class]="'agent ' + state(t).tone" [class.planned]="plannedFor(report.project.id, t.id)" [class.copied]="t.feeds === 'copy'" [class.verified]="isVerified(t)">
                 <span class="jack in" [attr.data-jack]="'tgt:' + report.project.id + ':' + t.id"></span>
                 <span class="agent-name">{{ agents[t.id] }}</span>
                 <span class="agent-state">
                   @if (plannedFor(report.project.id, t.id)) { Will read the library } @else { {{ state(t).text }} }
                 </span>
-                @if (working(t) && !plannedFor(report.project.id, t.id)) { <span class="agent-doc">{{ invoke[t.id] }}</span> }
+                @if (working(t) && !plannedFor(report.project.id, t.id)) {
+                  @if (plannedVerify(report.project.id, t.id)) { <span class="agent-doc planned-note">Will be checked when you apply</span> }
+                  @else if (verified(t); as v) { <span class="agent-doc" [class.verified-line]="v.good" [class.caution-line]="!v.good">{{ v.text }}</span> }
+                  @else { <span class="agent-doc">Linked. Not checked with the tool yet</span> }
+                  <span class="agent-doc">{{ invoke[t.id] }}</span>
+                }
                 @if (t.feeds !== 'none' || t.docExists) { <span class="agent-doc">{{ t.doc }} {{ t.docExists ? 'present' : 'missing' }}</span> }
                 @if (!plannedFor(report.project.id, t.id)) {
                   @if (needsRepoint(t)) {
@@ -206,6 +211,9 @@
                   } @else if (staleCopy(t)) {
                     <button type="button" class="quiet tiny" (click)="s.copyFor(report.project.id, t)" [disabled]="s.applying()"
                             [attr.aria-label]="'Refresh the copy for ' + agents[t.id] + ' in ' + report.project.name">Refresh copy</button>
+                  } @else if (working(t) && !isVerified(t) && !plannedVerify(report.project.id, t.id)) {
+                    <button type="button" class="quiet tiny" (click)="s.verify(report.project.id, t)" [disabled]="s.applying()"
+                            [attr.aria-label]="'Verify ' + agents[t.id] + ' in ' + report.project.name">Verify</button>
                   }
                 }
               </li>

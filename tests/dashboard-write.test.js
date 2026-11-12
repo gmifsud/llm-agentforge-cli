@@ -121,6 +121,54 @@ test('a session project cannot be forgotten; a saved one can, and its folder is 
   assert.equal(new ReadService(f.options).refresh().projects.some(p => p.project.path === other), false);
 });
 
+test('verify asks the tool, saves its answer, and the answer goes out of date when the skills change', t => {
+  const f = fixture(t);
+  const skillsDir = path.join(f.project, '.claude', 'skills');
+  const calls = [];
+  // Stands in for the agent tool: it answers with every skill it can see in the folder.
+  const svc = new WriteService({ ...f.options, verifyRun: (command) => { calls.push(command); return fs.readdirSync(skillsDir).join('\n'); } });
+  const project = new ReadService(f.options).refresh().projects[0];
+  assert.equal(project.targets.find(x => x.id === 'claude').verification, null, 'never asked yet');
+  const change = { kind: 'project.verify', args: { projectId: project.project.id, target: 'claude' } };
+
+  const before = contentSnapshot(f.root);
+  const preview = ok(svc, change);
+  assert.ok(preview.lines.some(l => l.tone === 'warn' && /Sends one short question/.test(l.text)), 'says a question is sent on the user\'s account');
+  assert.ok(preview.lines.some(l => /Nothing in the project changes/.test(l.text)));
+  assert.deepEqual(calls, [], 'a preview never runs the tool');
+  assert.deepEqual(contentSnapshot(f.root), before, 'a preview writes nothing');
+
+  const unwired = svc.preview({ kind: 'project.verify', args: { projectId: project.project.id, target: 'gemini' } });
+  assert.equal(unwired.ok, false);
+  assert.match(unwired.conflicts[0], /Wire the agent first/);
+  assert.equal(svc.preview({ kind: 'project.verify', args: { projectId: project.project.id, target: 'nope' } }).ok, false);
+
+  const projectBefore = contentSnapshot(f.project);
+  assert.deepEqual(apply(svc, change).map(r => r.status), ['applied']);
+  assert.deepEqual(calls, ['claude']);
+  assert.deepEqual(contentSnapshot(f.project), projectBefore, 'the project itself is untouched');
+  let v = new ReadService(f.options).refresh().projects[0].targets.find(x => x.id === 'claude').verification;
+  assert.equal(v.level, 'verified');
+  assert.equal(v.tool, 'claude');
+  assert.equal(v.stale, false);
+  assert.equal(v.basis, undefined, 'the internal basis is not sent to the page');
+
+  // The folder the link points at changes: the old answer no longer describes what is there.
+  fs.mkdirSync(path.join(f.vault, 'added-later'));
+  fs.writeFileSync(path.join(f.vault, 'added-later', 'SKILL.md'), '# Added later\n');
+  fs.utimesSync(f.vault, new Date(), new Date(Date.now() + 5000));
+  v = new ReadService(f.options).refresh().projects[0].targets.find(x => x.id === 'claude').verification;
+  assert.equal(v.level, 'verified');
+  assert.equal(v.stale, true);
+
+  // A tool that is not installed is recorded as such, not as a failure of the change.
+  const missing = new WriteService({ ...f.options, verifyRun: () => { throw Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }); } });
+  assert.deepEqual(apply(missing, change).map(r => r.status), ['applied']);
+  v = new ReadService(f.options).refresh().projects[0].targets.find(x => x.id === 'claude').verification;
+  assert.equal(v.level, 'unavailable');
+  assert.match(v.detail, /not installed/);
+});
+
 function post(url, route, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);

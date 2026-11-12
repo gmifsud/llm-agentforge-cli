@@ -227,3 +227,34 @@ test('Antigravity gets a copy; a stale copy says so and is refreshed without los
   expect(fs.readFileSync(path.join(copied, 'mine', 'SKILL.md'), 'utf8')).toBe('local');
   expect(fs.readFileSync(path.join(copied, 'sql-review', 'SKILL.md'), 'utf8')).toContain('edited');
 });
+
+test('Verify previews what will be asked and runs no tool until applied', async ({ page }, info) => {
+  await page.getByRole('button', { name: 'Rebuild the library' }).click();
+  await applyAll(page, 1);
+  await page.getByRole('button', { name: 'Repoint Codex in project to the library' }).click();
+  await applyAll(page, 1);
+  const project = page.getByRole('article', { name: 'project' });
+  await expect(project).toContainText('Linked. Not checked with the tool yet');
+  // Claude Code still reads the vault directly, so there is nothing worth checking for it yet.
+  await expect(page.getByRole('button', { name: 'Verify Claude Code in project' })).toHaveCount(0);
+
+  const results = path.join(f.homedir, '.agentforge', 'verifications.json');
+  await page.getByRole('button', { name: 'Verify Codex in project' }).click();
+  await expect(tray(page)).toContainText('Sends one short question to');
+  await expect(tray(page)).toContainText('Nothing in the project changes');
+  await expect(page.getByRole('button', { name: 'Apply 1 change' })).toBeEnabled();
+  await expect(project).toContainText('Will be checked when you apply');
+  await expect(page.getByRole('button', { name: 'Verify Codex in project' })).toHaveCount(0);
+  expect(fs.existsSync(results)).toBe(false);
+
+  // An answer already on file is shown with its time, and the button gives way to it.
+  fs.mkdirSync(path.dirname(results), { recursive: true });
+  const { skillsBasis, nameKey } = require('../../server/workspace');
+  fs.writeFileSync(results, JSON.stringify({ [nameKey(path.resolve(f.project))]: { codex: { level: 'verified', tool: 'codex', detail: 'codex reported all 3 sampled skills', at: new Date().toISOString(), basis: skillsBasis(path.join(f.project, '.codex')) } } }));
+  await page.getByRole('button', { name: 'Discard all' }).click();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expect(project).toContainText(/Verified \S/);   // followed by the time, in the reader's own date format
+  await expect(project.locator('.agent.verified')).toHaveCount(1);
+  await project.screenshot({ path: info.outputPath('project-verified.png') });
+  await expect(page.getByRole('button', { name: 'Verify Codex in project' })).toHaveCount(0);
+});

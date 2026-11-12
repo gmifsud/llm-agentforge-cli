@@ -89,4 +89,43 @@ function diffLibrary(dir, winners) {
   };
 }
 
-module.exports = { nameKey, projectsFile, loadSavedProjects, saveSavedProjects, saveConfig, readLibrary, diffLibrary, normalizeTarget };
+// ─── verification results ───────────────────────────────────────────────────
+/**
+ * What a tool said when asked whether it sees the wired skills:
+ *   ~/.agentforge/verifications.json  { "<project path>": { "<target>": { level, tool, detail, at, basis } } }
+ * `basis` identifies what the skills folder held at that moment. When it no longer
+ * matches (the library was rebuilt, the link was repointed, the copy refreshed),
+ * the result is shown as out of date rather than as still true.
+ */
+function verificationsFile(paths) { return path.join(paths.agentforgeDir, 'verifications.json'); }
+
+function loadVerifications(paths) {
+  try { const v = JSON.parse(fs.readFileSync(verificationsFile(paths), 'utf8')); return v && typeof v === 'object' ? v : {}; }
+  catch { return {}; }   // a missing or damaged results file only means "not verified yet"
+}
+
+function saveVerification(paths, projectPath, target, result) {
+  const all = loadVerifications(paths);
+  const key = nameKey(path.resolve(projectPath));
+  all[key] = { ...(all[key] || {}), [target]: result };
+  fs.mkdirSync(paths.agentforgeDir, { recursive: true });
+  atomicWrite(verificationsFile(paths), JSON.stringify(all, null, 2) + '\n');
+}
+
+function verificationFor(all, projectPath, target) { return all[nameKey(path.resolve(projectPath))]?.[target] || null; }
+
+/** Identity of what <dotDir>/skills holds right now, without reading any skill. */
+function skillsBasis(dotDir) {
+  const skillsDir = path.join(dotDir, 'skills');
+  let st;
+  try { st = fs.lstatSync(skillsDir); } catch { return 'missing'; }
+  if (st.isSymbolicLink()) {
+    try { const real = fs.realpathSync.native(skillsDir); return `link:${normalizeTarget(real)}@${Math.round(fs.statSync(real).mtimeMs)}`; }
+    catch { return 'broken'; }
+  }
+  try { const marker = JSON.parse(fs.readFileSync(path.join(dotDir, '.agentforge-skills.json'), 'utf8')); if (marker && marker.fingerprint) return `copy:${marker.fingerprint}`; } catch { /* not a managed copy */ }
+  return `dir:${Math.round(st.mtimeMs)}`;
+}
+
+module.exports = { nameKey, projectsFile, loadSavedProjects, saveSavedProjects, saveConfig, readLibrary, diffLibrary, normalizeTarget,
+  verificationsFile, loadVerifications, saveVerification, verificationFor, skillsBasis };

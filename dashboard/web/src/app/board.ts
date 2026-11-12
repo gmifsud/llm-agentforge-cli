@@ -124,6 +124,17 @@ export class Board implements OnInit, OnDestroy {
       default: return { text: 'Not wired', tone: 'muted' };
     }
   }
+  /** What the tool itself last said, in words. Null when it has never been asked. */
+  verified(t: TargetReport): { text: string; good: boolean } | null {
+    const v = t.verification; if (!v) return null;
+    const when = new Date(v.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    if (v.level === 'verified') return v.stale ? { text: `Last verified ${when}; the skills have changed since`, good: false } : { text: `Verified ${when}`, good: true };
+    const said: Record<string, string> = { partial: 'saw only some of the skills', 'not-listed': 'did not see the skills', unreliable: 'gave an answer that cannot be trusted', 'not-wired': 'had nothing to check', unavailable: 'could not be asked' };
+    return { text: `Checked ${when}: the tool ${said[v.level] || 'did not confirm'}`, good: false };
+  }
+  isVerified(t: TargetReport) { return t.verification?.level === 'verified' && !t.verification.stale; }
+  plannedVerify(projectId: string, target: string) { return this.s.pendingFor('project.verify', a => a['projectId'] === projectId && a['target'] === target).length > 0; }
+
   /** Skills reach the agent: show how to call one. */
   working(t: TargetReport) { return t.feeds === 'library' || (t.feeds === 'copy' && t.copy?.state === 'fresh'); }
   /** Agents worth a row: anything wired, broken, copied or about to be wired. */

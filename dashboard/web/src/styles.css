@@ -360,3 +360,8 @@ a.button:hover { border-color: var(--ink); }
 }
 .differs table { table-layout: fixed; }
 .differs thead th:first-child, .differs tbody th { width: 20%; }
+
+/* ─── verified: the tool itself confirmed it sees the skills. A ring on the socket, not another cable colour. ─── */
+.agent.verified .jack { box-shadow: 0 0 0 3px var(--module), 0 0 0 5px var(--live); }
+.agent-doc.verified-line { color: var(--live); font-weight: 600; }
+.agent-doc.caution-line { color: var(--caution); }

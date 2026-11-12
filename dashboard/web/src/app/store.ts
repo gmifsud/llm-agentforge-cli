@@ -13,7 +13,7 @@ function message(error: any): string { return error?.error?.error?.message || 'T
 /** Pipeline order: sources change first, then the library, then projects. */
 const STAGE: Record<ChangeKind, number> = {
   'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.order': 0, 'source.fetch': 1,
-  'library.rebuild': 2, 'project.add': 3, 'project.forget': 3, 'project.wire': 4,
+  'library.rebuild': 2, 'project.add': 3, 'project.forget': 3, 'project.wire': 4, 'project.verify': 5,
 };
 
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
@@ -207,6 +207,7 @@ export class Store {
       const deferred = item.change.kind === 'library.rebuild' ? before.length > 0
         : item.change.kind === 'project.wire' ? before.some(b => b.change.kind === 'library.rebuild')
         : item.change.kind === 'source.fetch' ? before.some(b => b.change.kind === 'source.attach')
+        : item.change.kind === 'project.verify' ? before.some(b => ['project.wire', 'library.rebuild'].includes(b.change.kind))
         : false;
       return { ...item, deferred };
     });
@@ -217,7 +218,7 @@ export class Store {
     if (!item.preview) return false;
     if (item.preview.ok) return true;
     // Waiting on an earlier queued step (a library a rebuild will create, a source an attach will add) is not a block.
-    return item.deferred && item.preview.conflicts.every(c => /library has not been built|No Git source called/i.test(c));
+    return item.deferred && item.preview.conflicts.every(c => /library has not been built|No Git source called|does not exist yet\. Wire the agent first/i.test(c));
   }
 
   /** One preview at a time (the server runs one change job at a time); items queued meanwhile are picked up by the same loop. */
@@ -277,6 +278,8 @@ export class Store {
   }
   repoint(projectId: string, target: TargetReport) { this.wire(projectId, [target.id], { writeDocs: false, repoint: true }); }
   /** Swap a link for a copy (a tool that ignores links), or refresh a copy that has fallen behind the library. */
+  /** Ask the tool itself. A check queued behind a wire or rebuild runs after it, against the result. */
+  verify(projectId: string, target: TargetReport) { this.queue({ kind: 'project.verify', args: { projectId, target: target.id } }); }
   copyFor(projectId: string, target: TargetReport) { this.wire(projectId, [target.id], { writeDocs: false, link: 'copy' }); }
 
   /** Changes waiting in the tray that touch a given thing, for ghost cables and badges. */

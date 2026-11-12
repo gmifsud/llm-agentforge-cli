@@ -137,6 +137,17 @@ describe('client state', () => {
     for (let i = 0; i < 6; i++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await Promise.resolve(); await Promise.resolve(); }
   });
 
+  it('a check queued with a wire runs after it and waits for it; on its own it does not wait', async () => {
+    store.catalog.set(catalog);
+    store.verify('p1', { id: 'claude' } as any);
+    expect(store.tray().map(i => i.deferred)).toEqual([false]);
+    store.wire('p1', ['claude']);
+    expect(store.tray().map(i => i.change.kind)).toEqual(['project.wire', 'project.verify']);
+    expect(store.tray().map(i => i.deferred)).toEqual([false, true]);
+    expect(store.tray()[1].change.args).toEqual({ projectId: 'p1', target: 'claude' });
+    for (let n = 0; n < 4; n++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await Promise.resolve(); await Promise.resolve(); }
+  });
+
   it('a comparison answer for an earlier request is ignored', async () => {
     store.catalog.set(clashCatalog());
     const first = store.compare('tdd-a', 'tdd-v');

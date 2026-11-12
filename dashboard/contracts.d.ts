@@ -28,9 +28,11 @@ export interface LibraryState {
   add: string[]; remove: string[]; change: string[]; inSync: boolean | null;
 }
 export type Feeds = 'library' | 'vault' | 'elsewhere' | 'broken' | 'copy' | 'needs-copy' | 'blocked' | 'unreadable' | 'none';
+/** What the tool itself last reported. stale = the skills folder has changed since it was asked. */
+export interface Verification { level: 'verified' | 'partial' | 'not-listed' | 'unreliable' | 'not-wired' | 'unavailable'; tool: string; detail: string; at: string; stale: boolean }
 export interface CopyInfo { state: 'fresh' | 'stale'; copiedAt: string | null }
 export interface TargetReport {
-  id: string; dir: string; doc: string; docExists: boolean; optIn: boolean; copy: CopyInfo | null; kind: string; health: string;
+  id: string; dir: string; doc: string; docExists: boolean; optIn: boolean; copy: CopyInfo | null; verification: Verification | null; kind: string; health: string;
   resolvedTarget: string | null; feeds: Feeds; entries: number | null; match: 'matches' | 'differs' | 'unknown';
 }
 export interface ProjectReport {
@@ -57,7 +59,7 @@ export interface SkillComparison {
 }
 export interface SkillDocument { id: string; sourceId: string; relativePath: string; text: string; readAt: string }
 
-export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire';
+export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire' | 'project.verify';
 export interface Change { kind: ChangeKind; args?: Record<string, unknown> }
 export interface ChangeLine { tone: 'add' | 'remove' | 'change' | 'note' | 'warn'; text: string }
 export interface ChangePreview { kind: ChangeKind; title: string; lines: ChangeLine[]; conflicts: string[]; ok: boolean; args?: Record<string, unknown> }

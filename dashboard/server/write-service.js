@@ -22,11 +22,12 @@ const { createGit } = require('../../src/infra/git');
 const { samePath, inspectDestination } = require('../../src/infra/fs-inspect');
 const { localPath, contained } = require('./read-service');
 const { ReadError, ERROR } = require('./constants');
-const { nameKey, loadSavedProjects, saveSavedProjects, saveConfig, diffLibrary } = require('./workspace');
+const { nameKey, loadSavedProjects, saveSavedProjects, saveConfig, diffLibrary, saveVerification, skillsBasis } = require('./workspace');
+const { verifyTarget, DEFAULT_TOOL, TOOLS } = require('../../src/application/verify');
 const { createHash } = require('node:crypto');
 
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
-const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire'];
+const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -39,12 +40,13 @@ function str(value, field, { optional = false, max = 2048 } = {}) {
 }
 
 class WriteService {
-  constructor({ homedir = os.homedir(), projects = [process.cwd()], vault, env = process.env, git } = {}) {
+  constructor({ homedir = os.homedir(), projects = [process.cwd()], vault, env = process.env, git, verifyRun } = {}) {
     this.paths = createPaths({ homedir, scriptDir: path.resolve(__dirname, '../..') });
     this.env = { AGENTFORGE_VAULT_ROOT: env.AGENTFORGE_VAULT_ROOT };
     this.vault = vault;
     this.sessionProjects = projects.map(p => path.resolve(p));
     this.git = git || createGit();
+    this.verifyRun = verifyRun;   // injected in tests; the real one runs the agent tool
   }
 
   // ─── shared state ──────────────────────────────────────────────────────────
@@ -281,6 +283,35 @@ class WriteService {
       run: () => { saveSavedProjects(this.paths, loadSavedProjects(this.paths).filter(x => !samePath(x, p.path))); } };
   }
 
+  /** Ask the agent tool itself whether it sees the wired skills. Writes nothing in the project. */
+  project_verify(args) {
+    const p = this.project(str(args.projectId, 'Project', { max: 64 }));
+    const target = str(args.target, 'Agent', { max: 32 });
+    if (!TARGETS[target]) throw bad(`Unknown agent "${target}".`);
+    const tool = DEFAULT_TOOL[target];
+    const who = TOOL_NAMES[tool] || tool;
+    const dotDir = path.join(p.path, TARGETS[target].dir);
+    const conflicts = [];
+    const st = inspectDestination(path.join(dotDir, 'skills'));
+    if (st.kind === 'missing') conflicts.push(`${TARGETS[target].dir}/skills does not exist yet. Wire the agent first.`);
+    else if (st.kind === 'link' && st.broken) conflicts.push(`${TARGETS[target].dir}/skills is a broken link. Repoint it first.`);
+    const lines = [{ tone: 'note', text: `Ask ${who} whether it sees the skills in ${p.name}` }];
+    lines.push(TOOLS[tool].asks
+      ? { tone: 'warn', text: `Sends one short question to ${who}, on your account with that tool. It is told not to read files or run commands.` }
+      : { tone: 'note', text: `Runs ${who}'s own skill listing. No question is sent to a model.` });
+    lines.push({ tone: 'note', text: 'Nothing in the project changes. The answer is saved so the board can show it.' });
+    return { title: `Check ${who} in ${p.name}`, lines, conflicts, ok: conflicts.length === 0, args: { projectId: p.id, target },
+      run: () => {
+        const r = verifyTarget({ projectRoot: p.path, target, tool, ...(this.verifyRun ? { run: this.verifyRun } : {}) });
+        saveVerification(this.paths, p.path, target, { level: r.level, tool: r.tool, detail: r.detail, at: new Date().toISOString(), basis: skillsBasis(dotDir) });
+        const good = r.level === 'verified';
+        const out = [{ tone: good ? 'add' : 'warn', text: good ? `${who} sees the skills: ${r.detail.replace(/^\S+ /, '')}` : `${who} did not confirm it: ${r.detail}` }];
+        if (r.sampled.length) out.push({ tone: 'note', text: `Asked about: ${r.sampled.join(', ')}` });
+        if (r.level === 'not-listed' && TARGETS[target].copyOnly !== true && tool === 'antigravity') out.push({ tone: 'note', text: 'Antigravity does not follow links. Give it a copy.' });
+        return { lines: out, message: good ? '' : 'Checked; the tool did not confirm it sees the skills.' };
+      } };
+  }
+
   project_wire(args) {
     const p = this.project(str(args.projectId, 'Project', { max: 64 }));
     const targets = Array.isArray(args.targets) ? [...new Set(args.targets)] : [];
@@ -317,6 +348,8 @@ class WriteService {
       } };
   }
 }
+
+const TOOL_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor', antigravity: 'Antigravity' };
 
 /** What makes an already-open session notice new skills. Claude Code's is documented and was exercised; the rest are from each tool's documentation. */
 const RELOAD = {
