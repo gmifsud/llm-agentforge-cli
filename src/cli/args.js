@@ -11,12 +11,12 @@ const { usage } = require('../domain/errors');
 const VALUE_OPTIONS = {
   path: 'path', target: 'target', name: 'name', stack: 'stack', owner: 'owner',
   buildcmd: 'build', build: 'build', testcmd: 'test', test: 'test', runcmd: 'run', run: 'run',
-  vaultroot: 'vault', vault: 'vault', linktype: 'link', link: 'link', branch: 'branch',
+  vaultroot: 'vault', vault: 'vault', linktype: 'link', link: 'link', branch: 'branch', tool: 'tool',
 };
 const FLAG_OPTIONS = {
   dryrun: 'dryRun', 'dry-run': 'dryRun', force: 'force', preserve: 'preserve',
   nopreserve: 'noPreserve', 'no-preserve': 'noPreserve', json: 'json',
-  nofetch: 'noFetch', 'no-fetch': 'noFetch', help: 'help', h: 'help', verbose: 'verbose',
+  nofetch: 'noFetch', 'no-fetch': 'noFetch', trustworkspace: 'trustWorkspace', 'trust-workspace': 'trustWorkspace', help: 'help', h: 'help', verbose: 'verbose',
 };
 
 function parseArgs(argv) {

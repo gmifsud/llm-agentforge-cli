@@ -11,32 +11,36 @@
   <div class="column" aria-labelledby="h-sources">
     <header class="column-head">
       <h2 id="h-sources">Sources</h2>
-      <p>Where skills come from</p>
+      <p>Where skills come from@if (showOrder()) {. When two have the same skill, the higher one wins}</p>
     </header>
 
-    @if (s.vault(); as v) {
-      <article class="module vault" [attr.aria-label]="'Your vault, ' + sourceState(v)">
-        <h3>Your vault</h3>
-        <p class="path">{{ v.root }}</p>
-        <p class="state" [class.fault]="v.state !== 'available'">{{ sourceState(v) }}</p>
-        <p class="fine">Agentforge only reads this folder.</p>
-        <span class="jack out" [attr.data-jack]="'src:' + v.id"></span>
-      </article>
-    }
+    @if (s.pendingOrder()) { <p class="planned-note">This order takes effect when you apply your changes.</p> }
 
-    @for (src of s.attached(); track src.id) {
-      <article class="module" [class.leaving]="plannedSource(src) === 'Will be detached'" [attr.aria-label]="src.name + ', ' + sourceState(src)">
-        <h3>{{ src.name }} <span class="kind">{{ src.kind === 'git' ? 'Git' : 'Folder' }}</span></h3>
-        <p class="path">{{ src.location }}</p>
+    @for (src of s.orderedSources(); track src.id; let i = $index; let last = $last) {
+      <article class="module" [class.vault]="src.kind === 'primary'" [class.leaving]="plannedSource(src) === 'Will be detached'"
+               [attr.aria-label]="label(src) + ', ' + sourceState(src)">
+        <h3>
+          @if (showOrder()) { <span class="rank" [attr.aria-label]="'Position ' + (i + 1)">{{ i + 1 }}</span> }
+          {{ label(src) }}
+          @if (src.kind !== 'primary') { <span class="kind">{{ src.kind === 'git' ? 'Git' : 'Folder' }}</span> }
+        </h3>
+        <p class="path">{{ src.kind === 'primary' ? src.root : src.location }}</p>
         <p class="state" [class.caution]="src.state === 'not-fetched'" [class.fault]="src.state !== 'available' && src.state !== 'not-fetched'">
           {{ sourceState(src) }}@if (src.revision) { <span class="rev">at {{ short(src.revision) }}</span> }
         </p>
-        @if (src.rejectionCount) { <p class="fine">{{ src.rejectionCount }} {{ src.rejectionCount === 1 ? 'entry was' : 'entries were' }} skipped. See the skill library for details.</p> }
+        @if (src.kind === 'primary') { <p class="fine">Agentforge only reads this folder.</p> }
+        @if (src.rejectionCount) { <p class="fine">{{ src.rejectionCount }} {{ src.rejectionCount === 1 ? 'entry was' : 'entries were' }} skipped. The Skills page lists them.</p> }
         @if (plannedSource(src); as p) { <p class="planned-note">{{ p }}</p> }
-        <div class="actions">
-          @if (src.kind === 'git') { <button type="button" class="quiet" (click)="s.fetch(src)" [disabled]="s.applying()">Fetch updates</button> }
-          <button type="button" class="quiet" (click)="s.detach(src)" [disabled]="s.applying()">Detach</button>
-        </div>
+        @if (showOrder() || src.kind !== 'primary') {
+          <div class="actions">
+            @if (showOrder()) {
+              <button type="button" class="quiet tiny" (click)="s.moveSource(src, -1)" [disabled]="i === 0 || s.applying()" [attr.aria-label]="'Move ' + label(src) + ' up'">Move up</button>
+              <button type="button" class="quiet tiny" (click)="s.moveSource(src, 1)" [disabled]="last || s.applying()" [attr.aria-label]="'Move ' + label(src) + ' down'">Move down</button>
+            }
+            @if (src.kind === 'git') { <button type="button" class="quiet tiny" (click)="s.fetch(src)" [disabled]="s.applying()">Fetch updates</button> }
+            @if (src.kind !== 'primary') { <button type="button" class="quiet tiny" (click)="s.detach(src)" [disabled]="s.applying()">Detach</button> }
+          </div>
+        }
         <span class="jack out" [attr.data-jack]="'src:' + src.id"></span>
       </article>
     }
@@ -99,12 +103,38 @@
         </div>
         <ul class="legend">
           @for (part of s.contribution(); track part.source.id; let i = $index) {
-            <li><span class="swatch" [style.background]="shade(i)"></span>{{ part.source.kind === 'primary' ? 'Your vault' : part.source.name }} <b>{{ part.count }}</b></li>
+            <li><span class="swatch" [style.background]="shade(i)"></span>{{ label(part.source) }} <b>{{ part.count }}</b></li>
           }
         </ul>
       }
       @if (libraryStatus(); as st) { <p class="state" [class]="'state ' + st.tone" role="status">{{ st.text }}</p> }
       <p class="path">{{ c.library.path }}</p>
+
+      @if (c.health; as h) {
+        @if (showBudget()) {
+          <div class="budget" [class.over]="!h.budget.fits">
+            <h4 id="h-budget">What your agents will see</h4>
+            <div class="meter" role="img" [attr.aria-label]="budgetPercent() + ' percent of skill descriptions fit'"><span [style.width.%]="budgetPercent()"></span></div>
+            @if (h.budget.fits) {
+              <p class="fine">Every description fits, so agents can pick any of these skills on their own.</p>
+            } @else {
+              <p>About {{ h.budget.kept }} of {{ h.budget.entries }} descriptions fit. The rest can still be called by name, but agents will not pick them on their own.</p>
+              <details><summary>Why this matters</summary>
+                <p class="fine">An agent chooses a skill by reading its description. Tools only load descriptions up to a budget; past it, the least-used are left out. Wiring fewer skills into a project keeps more of them visible.</p>
+              </details>
+            }
+          </div>
+        }
+        @if (problemCount()) {
+          <p class="health-line"><span class="state caution">{{ problemCount() }} {{ problemCount() === 1 ? 'skill has a problem' : 'skills have problems' }} in some tools</span>
+            <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show</button></p>
+        }
+        @if (h.shadows.length) {
+          <p class="health-line"><span class="state caution">{{ h.shadows.length }} personal {{ h.shadows.length === 1 ? 'skill hides' : 'skills hide' }} a library skill of the same name</span>
+            <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show</button></p>
+        }
+      }
+
       <div class="actions">
         <button type="button" [class.primary]="c.library.inSync === false || !c.library.built" [class.quiet]="c.library.inSync !== false && c.library.built"
                 (click)="s.rebuild()" [disabled]="s.applying()">{{ c.library.built ? 'Rebuild the library' : 'Build the library' }}</button>
@@ -113,30 +143,31 @@
       <span class="jack out" data-jack="lib-out"></span>
     </article>
 
-    @if (realClashes().length) {
-      <article class="module collisions" aria-labelledby="h-collisions">
-        <h3 id="h-collisions">Same name, more than one source</h3>
-        <p class="fine">The library holds one of each. Choose which one your agents get.</p>
-        @for (col of collisions(); track col.name) {
-          <fieldset class="choice">
-            <legend>{{ col.name }}</legend>
-            @for (id of col.candidateIds; track id) {
-              @if (s.skillById(id); as sk) {
-                <label>
-                  <input type="radio" [name]="'pick-' + col.name" [checked]="plannedChoice(col.name) ? (s.sourceById(sk.sourceId)?.key === plannedChoice(col.name)) : id === col.winnerId"
-                         (change)="choose(col.name, sk.sourceId)" [disabled]="s.applying()">
-                  {{ s.sourceName(sk.sourceId) }}
-                  @if (id === col.winnerId && !plannedChoice(col.name)) { <span class="tag">{{ col.preferredSourceId ? 'your choice' : 'default' }}</span> }
-                </label>
-              }
-            }
-            @if (plannedChoice(col.name)) { <p class="planned-note">Changes when you apply</p> }
-          </fieldset>
-        }
-        @if (realClashes().length > 5) {
-          <button type="button" class="quiet" (click)="showAllCollisions.set(!showAllCollisions())">{{ showAllCollisions() ? 'Show fewer' : 'Show all ' + realClashes().length }}</button>
-        }
-      </article>
+    @if (s.clashCounts(); as n) {
+      @if (n.total) {
+        <article class="module clashes" aria-labelledby="h-clashes">
+          <h3 id="h-clashes">Same name, more than one source</h3>
+          <ul class="clash-summary">
+            @if (n.changed) { <li class="caution"><b>{{ n.changed }}</b> changed since you chose</li> }
+            @if (n.needs) { <li><b>{{ n.needs }}</b> {{ n.needs === 1 ? 'needs' : 'need' }} a look <span class="fine">only the default order decided</span></li> }
+            @if (n.decided) { <li class="muted"><b>{{ n.decided }}</b> decided <span class="fine">by your source order, or by you</span></li> }
+            @if (n.identical) { <li class="muted"><b>{{ n.identical }}</b> identical {{ n.identical === 1 ? 'copy' : 'copies' }} <span class="fine">nothing to decide</span></li> }
+          </ul>
+          @for (col of attentionRows(); track col.name) {
+            <div class="clash-row">
+              <div>
+                <strong>{{ col.name }}</strong>
+                <span class="fine">{{ clashLine(col) }}</span>
+                @if (plannedChoice(col.name)) { <span class="planned-note">Changes when you apply</span> }
+              </div>
+              <a class="button quiet tiny" [routerLink]="['/compare', col.name]" [attr.aria-label]="'Compare the copies of ' + col.name">Compare</a>
+            </div>
+          }
+          @if (s.attention().length > 5 || n.decided) {
+            <div class="actions"><button type="button" class="quiet tiny" (click)="showSkills(s.attention().length > 5 ? 'attention' : 'collisions')">{{ s.attention().length > 5 ? 'Show all ' + s.attention().length : 'See every clash' }}</button></div>
+          }
+        </article>
+      }
     }
   </div>
 
@@ -157,17 +188,25 @@
           @if (!shown(report).length) { <p class="state muted">No agents read skills here yet.</p> }
           <ul class="agents">
             @for (t of shown(report); track t.id) {
-              <li [class]="'agent ' + feeds(t).tone" [class.planned]="plannedFor(report.project.id, t.id)">
+              <li [class]="'agent ' + state(t).tone" [class.planned]="plannedFor(report.project.id, t.id)" [class.copied]="t.feeds === 'copy'">
                 <span class="jack in" [attr.data-jack]="'tgt:' + report.project.id + ':' + t.id"></span>
                 <span class="agent-name">{{ agents[t.id] }}</span>
                 <span class="agent-state">
-                  @if (plannedFor(report.project.id, t.id)) { Will read the library }
-                  @else { {{ feeds(t).text }}@if (t.feeds === 'copy') { ({{ t.entries }}) } }
+                  @if (plannedFor(report.project.id, t.id)) { Will read the library } @else { {{ state(t).text }} }
                 </span>
+                @if (working(t) && !plannedFor(report.project.id, t.id)) { <span class="agent-doc">{{ invoke[t.id] }}</span> }
                 @if (t.feeds !== 'none' || t.docExists) { <span class="agent-doc">{{ t.doc }} {{ t.docExists ? 'present' : 'missing' }}</span> }
-                @if (needsRepoint(t) && !plannedFor(report.project.id, t.id)) {
-                  <button type="button" class="quiet tiny" (click)="s.repoint(report.project.id, t)" [disabled]="s.applying()"
-                          [attr.aria-label]="'Repoint ' + agents[t.id] + ' in ' + report.project.name + ' to the library'">Repoint</button>
+                @if (!plannedFor(report.project.id, t.id)) {
+                  @if (needsRepoint(t)) {
+                    <button type="button" class="quiet tiny" (click)="s.repoint(report.project.id, t)" [disabled]="s.applying()"
+                            [attr.aria-label]="'Repoint ' + agents[t.id] + ' in ' + report.project.name + ' to the library'">Repoint</button>
+                  } @else if (needsCopy(t)) {
+                    <button type="button" class="quiet tiny" (click)="s.copyFor(report.project.id, t)" [disabled]="s.applying()"
+                            [attr.aria-label]="'Give ' + agents[t.id] + ' in ' + report.project.name + ' a copy of the library'">Copy instead</button>
+                  } @else if (staleCopy(t)) {
+                    <button type="button" class="quiet tiny" (click)="s.copyFor(report.project.id, t)" [disabled]="s.applying()"
+                            [attr.aria-label]="'Refresh the copy for ' + agents[t.id] + ' in ' + report.project.name">Refresh copy</button>
+                  }
                 }
               </li>
             }
@@ -183,6 +222,7 @@
                 <label><input type="checkbox" [checked]="wireTargets().has(id)" (change)="toggleTarget(id, $any($event.target).checked)"> {{ agents[id] }}</label>
               }
             </fieldset>
+            @if (wireTargets().has('antigravity')) { <p class="fine">Antigravity does not follow links, so .agents/skills becomes a copy. Refresh it after the library changes.</p> }
             <label class="inline"><input type="checkbox" [checked]="wireDocs()" (change)="wireDocs.set($any($event.target).checked)"> Write the instruction file if it is missing</label>
             <label class="inline"><input type="checkbox" [checked]="wireCopy()" (change)="wireCopy.set($any($event.target).checked)"> Copy the skills instead of linking</label>
             @if (wireCopy()) { <p class="fine">A copy does not follow later changes to the library.</p> }

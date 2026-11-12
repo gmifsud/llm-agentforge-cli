@@ -26,7 +26,7 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
     const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(req.method === 'HEAD' ? undefined : JSON.stringify(data)); };
     try {
       const host = `${HOST}:${server.address().port}`, origin = `http://${host}`;
@@ -72,7 +72,7 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
         if (req.method === 'HEAD') { res.writeHead(204); res.end(); return; }
         json(200, await reader.run(operation, args)); return;
       }
-      const filename = CLIENT_ROUTES.has(decoded) ? 'index.html' : decoded.slice(1);
+      const filename = CLIENT_ROUTES.has(decoded) || /^\/compare\/[^/]+$/.test(decoded) ? 'index.html' : decoded.slice(1);
       const file = path.resolve(assetRoot, filename);
       contained(assetRoot, file);
       const mime = MIME[path.extname(file)];

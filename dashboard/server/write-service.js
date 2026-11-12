@@ -26,7 +26,7 @@ const { nameKey, loadSavedProjects, saveSavedProjects, saveConfig, diffLibrary }
 const { createHash } = require('node:crypto');
 
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
-const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.rebuild', 'project.add', 'project.forget', 'project.wire'];
+const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -203,6 +203,35 @@ class WriteService {
       } };
   }
 
+  /** Which source wins when two have the same skill. A per-skill choice still beats the order. */
+  library_order(args) {
+    const order = Array.isArray(args.order) ? args.order : null;
+    if (!order || order.length > 200 || order.some(k => typeof k !== 'string' || !k || k.length > 64)) throw bad('Send the sources in the order you want.');
+    const config = this.config();
+    const repos = this.registry();
+    const known = new Set(['vault', ...repos.map(r => r.name)]);
+    const unknown = order.filter(k => !known.has(k));
+    if (unknown.length) throw bad(`Not an attached source: ${list(unknown)}.`);
+    if (new Set(order).size !== order.length) throw bad('A source appears twice in the order.');
+    const label = s => (s === 'vault' ? 'your vault' : s);
+    const viewWith = sourcePriority => computeView({ primaryRoot: this.primary(config), repos, cacheRootFor: r => cacheRootFor(this.paths, r), preferences: config.preferences || {}, sourcePriority });
+    const before = new Map(viewWith(config.sourcePriority).entries.map(e => [nameKey(e.name), e.source]));
+    const after = viewWith(order);
+    const flips = after.entries.filter(e => before.has(nameKey(e.name)) && before.get(nameKey(e.name)) !== e.source);
+    const lines = [{ tone: 'change', text: `Use this order when two sources have the same skill: ${after.order.map(label).join(', then ')}` }];
+    if (flips.length) {
+      const byWinner = new Map();
+      for (const f of flips) byWinner.set(f.source, [...(byWinner.get(f.source) || []), f.name]);
+      for (const [source, names] of byWinner) lines.push({ tone: 'change', text: `${plural(names.length, 'skill')} switch to ${label(source)}: ${list(names.sort())}` });
+    } else lines.push({ tone: 'note', text: 'No skill changes hands with this order.' });
+    if (after.order[0] !== 'vault') lines.push({ tone: 'warn', text: 'Your vault is no longer first. Where a source above it has the same skill, that source\'s version is used.' });
+    const kept = after.clashes.filter(c => c.by === 'choice').length;
+    if (kept) lines.push({ tone: 'note', text: `${plural(kept, 'skill')} you chose by hand keep your choice.` });
+    lines.push({ tone: 'note', text: 'Saved in ~/.agentforge/config.json. The command line uses the same order.' });
+    return { title: 'Set source order', lines, conflicts: [], ok: true, args: { order },
+      run: () => { saveConfig(this.paths, { ...this.config(), sourcePriority: order }); } };
+  }
+
   library_rebuild() {
     const config = this.config();
     const repos = this.registry();
@@ -280,9 +309,24 @@ class WriteService {
     if (libraryReady && !lines.some(l => l.tone !== 'note')) lines.push({ tone: 'note', text: 'Already wired. Nothing to change.' });
     return { title: `Wire ${p.name}`, lines, conflicts, ok: conflicts.length === 0, args: { projectId: p.id, targets, link, writeDocs, repoint },
       // apply() was called with a plan built moments ago by describe(); applyPlan re-checks every precondition.
-      run: () => { for (const plan of chosen) applyPlan(plan); } };
+      run: () => {
+        for (const plan of chosen) applyPlan(plan);
+        const changed = chosen.filter(plan => plan.actions.some(a => a.kind !== 'append-gitignore')).map(plan => plan.target);
+        const hints = [...new Set(changed.map(t => RELOAD[t]).filter(Boolean))].map(text => ({ tone: 'note', text }));
+        return { lines: [...lines, ...(hints.length ? [{ tone: 'note', text: 'To use them in a session that is already open:' }, ...hints] : [])] };
+      } };
   }
 }
+
+/** What makes an already-open session notice new skills. Claude Code's is documented and was exercised; the rest are from each tool's documentation. */
+const RELOAD = {
+  claude: 'Claude Code: run /reload-skills',
+  codex: 'Codex: picked up automatically; restart it if a skill is missing',
+  gemini: 'Gemini CLI: run /skills reload',
+  cursor: 'Cursor: start a new chat if a skill is missing',
+  generic: 'Tools reading .agents/skills: Codex picks it up; Gemini CLI needs /skills reload',
+  antigravity: 'Antigravity: start a new session',
+};
 
 function rel(projectRoot, p) { const r = path.relative(projectRoot, p); return r && !r.startsWith('..') ? r.split(path.sep).join('/') : p; }
 function where(target, library, vault) {

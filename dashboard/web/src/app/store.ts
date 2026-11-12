@@ -1,8 +1,8 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { Catalog, Context, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport } from '../../../contracts';
-export type { Catalog, Context, Skill, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds } from '../../../contracts';
+import type { Catalog, Context, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
+export type { Catalog, Context, Skill, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, DiffHunk, LintFinding } from '../../../contracts';
 
 export const PAGE_SIZE = 50;
 const API = '/api/v1';
@@ -12,10 +12,11 @@ function message(error: any): string { return error?.error?.error?.message || 'T
 
 /** Pipeline order: sources change first, then the library, then projects. */
 const STAGE: Record<ChangeKind, number> = {
-  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'source.fetch': 1,
+  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.order': 0, 'source.fetch': 1,
   'library.rebuild': 2, 'project.add': 3, 'project.forget': 3, 'project.wire': 4,
 };
 
+export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
 
 /** Names people know the tools by. `generic` is the shared .agents folder that Codex, Gemini, Cursor and Antigravity all read. */
@@ -36,7 +37,7 @@ export class Store {
   // Library page state
   skillQuery = signal('');
   sourceFilter = signal('');
-  view = signal<'all' | 'merged' | 'collisions'>('all');
+  view = signal<SkillView>('all');
   page = signal(0);
   skillId = signal('');
 
@@ -67,12 +68,77 @@ export class Store {
   readonly filteredSkills = computed(() => {
     const c = this.catalog(); if (!c) return [];
     const q = this.skillQuery().toLowerCase().trim();
-    const allowed = this.view() === 'merged' ? new Set(c.winnerIds) : this.view() === 'collisions' ? new Set(c.collisions.flatMap(x => x.candidateIds)) : null;
+    const v = this.view();
+    const allowed = v === 'merged' ? new Set(c.winnerIds)
+      : v === 'collisions' ? new Set(c.collisions.flatMap(x => x.candidateIds))
+      : v === 'attention' ? new Set(this.attention().flatMap(x => x.candidateIds))
+      : v === 'problems' ? new Set([...(c.health?.findings || []).filter(f => f.severity !== 'info').map(f => f.skillId), ...(c.health?.shadows || []).map(s => s.skillId || '')])
+      : null;
     return c.skills.filter(s => (!allowed || allowed.has(s.id)) && (!this.sourceFilter() || s.sourceId === this.sourceFilter()) &&
       (!q || `${s.name} ${s.relativePath} ${this.sourceName(s.sourceId)}`.toLowerCase().includes(q)));
   });
   readonly pages = computed(() => Math.max(1, Math.ceil(this.filteredSkills().length / PAGE_SIZE)));
   readonly visibleSkills = computed(() => this.filteredSkills().slice(this.page() * PAGE_SIZE, (this.page() + 1) * PAGE_SIZE));
+
+  // ─── same-name skills ──────────────────────────────────────────────────────
+  /** Clashes a person should look at: a copy changed since they chose, or only the built-in order decided. Changed first. */
+  readonly attention = computed(() => {
+    const all = this.catalog()?.collisions || [];
+    return [...all.filter(c => c.kind === 'changed'), ...all.filter(c => c.kind === 'default')];
+  });
+  readonly clashCounts = computed(() => {
+    const all = this.catalog()?.collisions || [];
+    const n = (k: string[]) => all.filter(c => k.includes(c.kind)).length;
+    return { identical: n(['identical']), decided: n(['choice', 'order']), needs: n(['default']), changed: n(['changed']), total: all.length };
+  });
+  clashByName(name: string) { return this.catalog()?.collisions.find(c => c.name === name) || null; }
+  /** Why a skill is or is not what your agents get. */
+  reason(skill: Skill): string {
+    const c = this.catalog(); if (!c) return '';
+    if (!c.mergeAvailable) return 'Unknown';
+    if (c.winnerIds.includes(skill.id)) return 'In the library';
+    const col = this.collision(skill.id); if (!col) return 'Not in the library';
+    if (col.identicalIds.includes(skill.id)) return 'Identical to the one in use';
+    return col.by === 'choice' ? 'You chose another' : col.by === 'order' ? 'Lower in your source order' : 'Lower in the default order';
+  }
+  findingsFor(skillId: string) { return (this.catalog()?.health?.findings || []).filter(f => f.skillId === skillId); }
+  shadowsFor(skillId: string) { return (this.catalog()?.health?.shadows || []).filter(s => s.skillId === skillId); }
+
+  // ─── source order ──────────────────────────────────────────────────────────
+  /** Sources highest priority first; a queued reorder is shown as if already applied, so the list answers "what will it be". */
+  readonly pendingOrder = computed(() => this.tray().find(i => i.change.kind === 'library.order')?.change.args?.['order'] as string[] | undefined);
+  readonly orderedSources = computed(() => {
+    const c = this.catalog(); if (!c) return [] as Source[];
+    const pending = this.pendingOrder();
+    const byId = pending ? pending.map(k => c.sources.find(s => s.key === k)) : c.sourceOrder.map(id => c.sources.find(s => s.id === id));
+    const listed = byId.filter((s): s is Source => !!s);
+    return [...listed, ...c.sources.filter(s => !listed.includes(s))];
+  });
+  moveSource(source: Source, delta: -1 | 1) {
+    const order = this.orderedSources().map(s => s.key);
+    const i = order.indexOf(source.key), j = i + delta;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    // One reorder at a time in the review sheet: a second move replaces the first.
+    this.tray.update(list => list.filter(item => item.change.kind !== 'library.order'));
+    this.queue({ kind: 'library.order', args: { order } }, { kind: 'library.rebuild' });
+  }
+
+  // ─── comparing two copies ──────────────────────────────────────────────────
+  comparison = signal<SkillComparison | null>(null);
+  compareBusy = signal(false);
+  compareError = signal('');
+  private compareRequest = 0;
+  async compare(aId: string, bId: string) {
+    const c = this.catalog(); if (!c || this.stale()) return;
+    const request = ++this.compareRequest;
+    this.compareBusy.set(true); this.compareError.set(''); this.comparison.set(null);
+    try {
+      const res = await this.get<SkillComparison>(`/skills/${aId}/compare/${bId}?generation=${encodeURIComponent(c.generation)}`);
+      if (request === this.compareRequest) this.comparison.set(res);
+    } catch (e) { if (request === this.compareRequest) this.compareError.set(message(e)); }
+    finally { if (request === this.compareRequest) this.compareBusy.set(false); }
+  }
 
   sourceName(id: string) { const s = this.catalog()?.sources.find(x => x.id === id); return s ? (s.kind === 'primary' ? 'Your vault' : s.name) : 'Unknown source'; }
   sourceById(id: string) { return this.catalog()?.sources.find(x => x.id === id) || null; }
@@ -210,6 +276,8 @@ export class Store {
     this.queue(...(needsLibrary ? [{ kind: 'library.rebuild' as const }] : []), wire);
   }
   repoint(projectId: string, target: TargetReport) { this.wire(projectId, [target.id], { writeDocs: false, repoint: true }); }
+  /** Swap a link for a copy (a tool that ignores links), or refresh a copy that has fallen behind the library. */
+  copyFor(projectId: string, target: TargetReport) { this.wire(projectId, [target.id], { writeDocs: false, link: 'copy' }); }
 
   /** Changes waiting in the tray that touch a given thing, for ghost cables and badges. */
   pendingFor(kind: ChangeKind, match: (args: Record<string, unknown>) => boolean) {

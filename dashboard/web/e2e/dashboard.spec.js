@@ -141,3 +141,89 @@ test('narrow screen and 200% zoom reflow; keyboard focus returns to the list', a
   await page.evaluate(() => { document.documentElement.style.zoom = '2'; });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test('a name clash is reviewed side by side, and choosing a copy goes through the review sheet', async ({ page }) => {
+  const clashes = page.getByRole('article', { name: 'Same name, more than one source' });
+  await expect(clashes).toContainText('1 needs a look');
+  await expect(clashes).toContainText('frontend-design');
+  await clashes.getByRole('link', { name: 'Compare the copies of frontend-design' }).click();
+  await expect(page.getByRole('heading', { name: 'frontend-design', exact: true })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'Your vault, in use' })).toContainText('In use: higher in the default order');
+  await expect(page.getByRole('heading', { name: 'What differs' })).toBeVisible();
+  await expect(page.getByRole('table').first()).toContainText('frontend-design from vault');
+  const before = contentSnapshot(f.root);
+  await page.getByRole('button', { name: 'Use the frontend-design from frontend-lab' }).click();
+  await expect(tray(page)).toContainText('Use the frontend-design from frontend-lab in the library');
+  expect(contentSnapshot(f.root)).toEqual(before);
+  await expect(page.getByRole('article', { name: 'frontend-lab' })).toContainText('Will be used when you apply your changes');
+  await applyAll(page, 2);
+  await expect(page.getByRole('article', { name: 'frontend-lab, in use' })).toContainText('In use: your choice');
+  // A reload lands on the same page: nested routes are served the app shell.
+  await page.reload();
+  await expect(page.getByRole('article', { name: 'frontend-lab, in use' })).toBeVisible();
+  await page.getByRole('link', { name: 'Back to wiring' }).click();
+  await expect(page.getByRole('article', { name: 'Same name, more than one source' })).toContainText('1 decided');
+});
+
+test('moving a source up previews which skills switch, and applies as one reviewed change', async ({ page }) => {
+  const lab = page.getByRole('article', { name: 'frontend-lab, 2 skills' });
+  await expect(lab.getByLabel('Position 2')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Move Your vault up' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Move frontend-lab up' }).click();
+  await expect(tray(page)).toContainText('1 skill switch to frontend-lab: frontend-design');
+  await expect(tray(page)).toContainText('Your vault is no longer first');
+  await expect(lab.getByLabel('Position 1')).toBeVisible();
+  // Moving it back replaces the queued reorder; there is never more than one.
+  await page.getByRole('button', { name: 'Move frontend-lab down' }).click();
+  await expect(tray(page).getByText('Set source order')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Move frontend-lab up' }).click();
+  await applyAll(page, 2);
+  await expect(page.getByRole('article', { name: 'frontend-lab, 2 skills' }).getByLabel('Position 1')).toBeVisible();
+  expect(fs.realpathSync(path.join(f.homedir, '.agentforge', 'merged-skills', 'frontend-design')).toLowerCase()).toBe(path.join(f.source, 'frontend-design').toLowerCase());
+  await expect(page.getByRole('article', { name: 'Same name, more than one source' })).toContainText('1 decided');
+});
+
+test('library health is visible: the listing budget, rule problems, and where to see them', async ({ page }) => {
+  fs.writeFileSync(path.join(f.homedir, '.agentforge', 'config.json'), JSON.stringify({ vaultRoot: f.vault, listingBudgetChars: 30 }));
+  fs.writeFileSync(path.join(f.vault, 'sql-review', 'SKILL.md'), '---\nname: something-else\ndescription: Review SQL\n---\n');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  const library = page.getByRole('article', { name: 'Library', exact: true });
+  await expect(library).toContainText('What your agents will see');
+  await expect(library).toContainText('descriptions fit');
+  // Two: the renamed sql-review, and browser-testing, which this suite writes without frontmatter.
+  await expect(library).toContainText('2 skills have problems in some tools');
+  await library.getByRole('button', { name: 'Show' }).first().click();
+  await expect(page.getByRole('heading', { name: 'Skill library' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '2 skills' })).toBeVisible();
+  await page.getByRole('button', { name: 'sql-review', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Problems' })).toContainText('Cursor, Gemini CLI');
+});
+
+test('Antigravity gets a copy; a stale copy says so and is refreshed without losing added skills', async ({ page }) => {
+  await page.getByRole('button', { name: 'Rebuild the library' }).click();
+  await applyAll(page, 1);
+  const project = page.getByRole('article', { name: 'project' });
+  await project.getByRole('button', { name: 'Wire agents' }).click();
+  await project.getByRole('checkbox', { name: 'Claude Code' }).uncheck();
+  await project.getByRole('checkbox', { name: 'Antigravity' }).check();
+  await expect(project).toContainText('Antigravity does not follow links');
+  await project.getByRole('button', { name: 'Wire', exact: true }).click();
+  await expect(tray(page)).toContainText('Copy the library into .agents/skills');
+  await page.getByRole('button', { name: 'Apply 1 change' }).click();
+  await expect(tray(page)).toContainText('Antigravity: start a new session');
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(project).toContainText('Has a copy of the library, up to date');
+  await expect(project).toContainText('Chosen by the agent');
+
+  const copied = path.join(f.project, '.agents', 'skills');
+  fs.mkdirSync(path.join(copied, 'mine')); fs.writeFileSync(path.join(copied, 'mine', 'SKILL.md'), 'local');
+  fs.appendFileSync(path.join(f.vault, 'sql-review', 'SKILL.md'), 'edited\n');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expect(project).toContainText('Its copy is out of date');
+  await page.getByRole('button', { name: 'Refresh the copy for Antigravity in project' }).click();
+  await expect(tray(page)).toContainText('Skills you added there are kept');
+  await applyAll(page, 1);
+  await expect(project).toContainText('Has a copy of the library, up to date');
+  expect(fs.readFileSync(path.join(copied, 'mine', 'SKILL.md'), 'utf8')).toBe('local');
+  expect(fs.readFileSync(path.join(copied, 'sql-review', 'SKILL.md'), 'utf8')).toContain('edited');
+});

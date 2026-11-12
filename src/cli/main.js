@@ -9,6 +9,7 @@ const { createPaths, loadConfig, resolveDeployRoot } = require('../infra/paths')
 const { createGit } = require('../infra/git');
 const { buildVars, planProject, inspectProject } = require('../application/project');
 const { inspectLibrary } = require('../application/health');
+const { verifyTarget } = require('../application/verify');
 const { applyPlan, describeAction } = require('../deployment/apply');
 const { addSource, removeSource, listSources, fetchSources } = require('../application/sources');
 const { syncView } = require('../application/sync');
@@ -22,6 +23,8 @@ Usage:
                     [--link junction|symlink|copy|none|auto] [--dry-run] [--force] [--no-preserve]
   agentforge link   [--path P] [--target T] [--vault V] [--link L] [--dry-run] [--force] [--no-preserve]
   agentforge doctor [--path P] [--vault V] [--json]
+  agentforge verify [--path P] [--target T] [--tool claude|codex|gemini|cursor|antigravity] [--json]
+                                             ask the agent tool itself whether it sees the wired skills
   agentforge repo add <url-or-path> [--name ID] [--branch B]
   agentforge repo remove <ID>
   agentforge repo list [--json]
@@ -86,6 +89,8 @@ function run(argv, {
         return cmdProject(command, { paths, env, platform, cwd, opts, log, elog });
       case 'doctor':
         return cmdDoctor({ paths, env, cwd, opts, log, elog, stdout });
+      case 'verify':
+        return cmdVerify({ cwd, opts, log, elog, stdout });
       case 'repo':
         return cmdRepo(positional, { paths, env, opts, log, elog, stdout, git: gitClient });
       default:
@@ -180,6 +185,23 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
     if (t.link.kind === 'link') log.grey(`               ↳ ${t.link.broken ? 'BROKEN → ' : '→ '}${t.link.resolvedTarget || t.link.target}`);
   }
   return report.ok ? 0 : 1;
+}
+
+// ─── verify ──────────────────────────────────────────────────────────────────
+
+/** Linked is a file check; this asks the tool. Writes nothing. Exit 0 only when the tool reported every sampled skill. */
+function cmdVerify({ cwd, opts, log, elog, stdout }) {
+  const projectRoot = path.resolve(cwd, opts.path || '.');
+  const result = verifyTarget({ projectRoot, target: opts.target || 'claude', tool: opts.tool, trustWorkspace: Boolean(opts.trustWorkspace) });
+  if (opts.json) { stdout.write(JSON.stringify(result, null, 2) + '\n'); return result.level === 'verified' ? 0 : 1; }
+  log.step('agentforge verify');
+  log.info(`Project : ${projectRoot}`);
+  log.info(`Asking  : ${result.tool} about ${result.folder}`);
+  if (result.sampled.length) log.grey(`sampled: ${result.sampled.join(', ')}`);
+  log.raw('');
+  if (result.level === 'verified') log.ok(`${result.detail} (${result.seconds}s)`);
+  else elog.err(`${result.level}: ${result.detail}`);
+  return result.level === 'verified' ? 0 : 1;
 }
 
 /** Whether the skills can actually be invoked: rule problems, listing budget, and personal skills that hide linked ones. */

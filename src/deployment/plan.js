@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { inspectDestination, samePath, IS_WIN } = require('../infra/fs-inspect');
 const { renderTemplateFile } = require('../render-template');
-const { markerPath, fingerprint, readMarker } = require('./copy-state');
+const { MARKER, markerPath, fingerprint, readMarker } = require('./copy-state');
 
 /**
  * Planning is read-only. A plan is data: { target, actions[], conflicts[], notes[] }.
@@ -149,11 +149,14 @@ function planSkillsLink(plan, { projectRoot, target, vaultRoot, linkType, preser
 /** Ignore only the generated deployment artefact, never the instruction doc or the whole dot-folder. */
 function planGitignore(plan, { projectRoot, target }) {
   const ignoreFile = path.join(projectRoot, '.gitignore');
-  const wanted = `${target.dir}/skills`;
   let existing = [];
   if (fs.existsSync(ignoreFile)) existing = fs.readFileSync(ignoreFile, 'utf8').split(/\r?\n/).map((l) => l.trim());
-  if (existing.includes(wanted) || existing.includes(`${wanted}/`) || existing.includes(`${target.dir}/`)) return plan;
-  plan.actions.push({ kind: 'append-gitignore', destination: ignoreFile, lines: [wanted] });
+  if (existing.includes(`${target.dir}/`)) return plan;
+  const wanted = [`${target.dir}/skills`];
+  // A copy leaves a marker beside the folder. It holds a path on this machine, so it is ignored too.
+  if (plan.actions.some((a) => a.marker) || fs.existsSync(markerPath(path.join(projectRoot, target.dir)))) wanted.push(`${target.dir}/${MARKER}`);
+  const lines = wanted.filter((w) => !existing.includes(w) && !existing.includes(`${w}/`));
+  if (lines.length) plan.actions.push({ kind: 'append-gitignore', destination: ignoreFile, lines });
   return plan;
 }
 

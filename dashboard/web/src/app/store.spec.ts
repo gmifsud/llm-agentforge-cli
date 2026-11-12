@@ -94,4 +94,57 @@ describe('client state', () => {
     store.finish();
     expect(store.tray()).toEqual([]);
   });
+
+  const src = (id: string, key: string, kind: 'primary' | 'local' = 'local') => ({ id, key, kind, name: key, location: key, root: key, state: 'available' as const, revision: null, count: 1, rejectionCount: 0, error: null });
+  const clashCatalog = (): Catalog => ({
+    ...catalog,
+    sources: [src('v', 'vault', 'primary'), src('a', 'alpha'), src('b', 'beta')],
+    sourceOrder: ['v', 'a', 'b'],
+    skills: [
+      { id: 'tdd-v', sourceId: 'v', name: 'tdd', relativePath: 'tdd' }, { id: 'tdd-a', sourceId: 'a', name: 'tdd', relativePath: 'tdd' },
+      { id: 'x-a', sourceId: 'a', name: 'x', relativePath: 'x' }, { id: 'x-b', sourceId: 'b', name: 'x', relativePath: 'x' },
+      { id: 'same-v', sourceId: 'v', name: 'same', relativePath: 'same' }, { id: 'same-b', sourceId: 'b', name: 'same', relativePath: 'same' },
+    ],
+    winnerIds: ['tdd-a', 'x-a', 'same-v'],
+    collisions: [
+      { name: 'tdd', winnerId: 'tdd-a', candidateIds: ['tdd-v', 'tdd-a'], preferredSourceId: 'a', kind: 'changed', by: 'choice', stale: true, changedSourceIds: ['v'], identicalIds: [] },
+      { name: 'x', winnerId: 'x-a', candidateIds: ['x-a', 'x-b'], preferredSourceId: null, kind: 'default', by: 'default', stale: false, changedSourceIds: [], identicalIds: [] },
+      { name: 'same', winnerId: 'same-v', candidateIds: ['same-v', 'same-b'], preferredSourceId: null, kind: 'identical', by: 'default', stale: false, changedSourceIds: [], identicalIds: ['same-b'] },
+    ],
+  });
+
+  it('sorts clashes by what needs a person: changed first, then default-only; identical and decided never ask', () => {
+    store.catalog.set(clashCatalog());
+    expect(store.attention().map(c => c.name)).toEqual(['tdd', 'x']);
+    expect(store.clashCounts()).toEqual({ identical: 1, decided: 0, needs: 1, changed: 1, total: 3 });
+    const by = (id: string) => store.reason(store.skillById(id)!);
+    expect([by('tdd-a'), by('tdd-v'), by('x-b'), by('same-b')]).toEqual(['In the library', 'You chose another', 'Lower in the default order', 'Identical to the one in use']);
+    store.view.set('attention');
+    expect(store.filteredSkills().map(s => s.id).sort()).toEqual(['tdd-a', 'tdd-v', 'x-a', 'x-b']);
+  });
+
+  it('moving a source queues one reorder plus a rebuild, shows the new order at once, and a second move replaces the first', async () => {
+    store.catalog.set(clashCatalog());
+    store.moveSource(store.sourceById('b')!, -1);
+    expect(store.tray().map(i => i.change.kind)).toEqual(['library.order', 'library.rebuild']);
+    expect(store.tray()[0].change.args).toEqual({ order: ['vault', 'beta', 'alpha'] });
+    expect(store.orderedSources().map(s => s.key)).toEqual(['vault', 'beta', 'alpha']);
+    store.moveSource(store.sourceById('b')!, -1);
+    expect(store.tray().filter(i => i.change.kind === 'library.order').length).toBe(1);
+    expect(store.pendingOrder()).toEqual(['beta', 'vault', 'alpha']);
+    store.moveSource(store.sourceById('b')!, -1);   // already first: nothing changes
+    expect(store.pendingOrder()).toEqual(['beta', 'vault', 'alpha']);
+    for (let i = 0; i < 6; i++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await Promise.resolve(); await Promise.resolve(); }
+  });
+
+  it('a comparison answer for an earlier request is ignored', async () => {
+    store.catalog.set(clashCatalog());
+    const first = store.compare('tdd-a', 'tdd-v');
+    const second = store.compare('x-a', 'x-b');
+    http.expectOne('/api/v1/skills/tdd-a/compare/tdd-v?generation=g1').flush({ identical: true });
+    http.expectOne('/api/v1/skills/x-a/compare/x-b?generation=g1').flush({ identical: false });
+    await first; await second;
+    expect(store.comparison()?.identical).toBe(false);
+    expect(store.compareBusy()).toBe(false);
+  });
 });

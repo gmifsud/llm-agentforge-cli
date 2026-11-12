@@ -30,6 +30,8 @@ test('antigravity cannot follow links, so its skills folder is a recorded copy',
   const marker = readMarker(path.join(project, '.agents'));
   assert.deepEqual(marker.names, ['a', 'b']);
   assert.ok(!fs.existsSync(path.join(skills, MARKER)), 'the marker sits beside the skills folder, not in it');
+  const ignored = fs.readFileSync(path.join(project, '.gitignore'), 'utf8').split('\n');
+  assert.ok(ignored.includes('.agents/skills') && ignored.includes(`.agents/${MARKER}`), 'the copy and its machine-specific marker are both ignored');
   assert.equal(copyState(path.join(project, '.agents'), vault).state, 'fresh');
   assert.deepEqual(kinds(plan(project, vault, 'antigravity')), [], 'a fresh copy needs nothing');
 });
@@ -84,6 +86,18 @@ test('an existing link to the same library is swapped for a copy without --force
   for (const p of plans) applyPlan(p);
   assert.ok(fs.existsSync(path.join(vault, 'a', 'SKILL.md')));
   assert.equal(inspectDestination(path.join(project, '.agents', 'skills')).kind, 'directory');
+});
+
+test('a project copied before the marker was ignored gets the missing line on the next run', (t) => {
+  const root = tempRoot(t);
+  const vault = makeVault(root, 'vault', ['a']);
+  const project = path.join(root, 'proj'); fs.mkdirSync(project);
+  for (const p of plan(project, vault, 'antigravity')) applyPlan(p);
+  fs.writeFileSync(path.join(project, '.gitignore'), '# agentforge generated\n.agents/skills\n');
+  const plans = plan(project, vault, 'antigravity');
+  assert.deepEqual(plans[0].actions.map((a) => [a.kind, a.lines]), [['append-gitignore', [`.agents/${MARKER}`]]]);
+  for (const p of plans) applyPlan(p);
+  assert.deepEqual(kinds(plan(project, vault, 'antigravity')), [], 'and then nothing more');
 });
 
 test('cursor is an ordinary link target; neither new target is part of "all"', (t) => {

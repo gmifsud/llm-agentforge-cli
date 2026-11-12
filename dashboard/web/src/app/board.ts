@@ -1,26 +1,27 @@
 import { Component, ElementRef, OnDestroy, OnInit, afterRenderEffect, computed, inject, signal, untracked, viewChild } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { AGENTS, Store, type Source, type ProjectReport, type TargetReport, type Feeds } from './store';
+import { Router, RouterLink } from '@angular/router';
+import { AGENTS, Store, type Source, type ProjectReport, type TargetReport, type Collision, type SkillView } from './store';
 
 interface Cable { id: string; d: string; tone: 'live' | 'caution' | 'fault' | 'planned' | 'idle'; stub: boolean }
+type Tone = 'live' | 'caution' | 'fault' | 'muted';
 
-const FEEDS: Record<Feeds, { text: string; tone: 'live' | 'caution' | 'fault' | 'muted' }> = {
-  library: { text: 'Reads the library', tone: 'live' },
-  vault: { text: 'Reads your vault only', tone: 'caution' },
-  elsewhere: { text: 'Reads another folder', tone: 'caution' },
-  broken: { text: 'Link is broken', tone: 'fault' },
-  copy: { text: 'Has its own copy', tone: 'muted' },
-  'needs-copy': { text: 'Linked, but this tool needs a copy', tone: 'caution' },
-  blocked: { text: 'A file is in the way', tone: 'fault' },
-  unreadable: { text: 'Cannot be read', tone: 'fault' },
-  none: { text: 'Not wired', tone: 'muted' },
+/** How a person calls a skill in each tool. Claude Code's was exercised for real; the rest are from each tool's documentation. */
+const INVOKE: Record<string, string> = {
+  claude: 'Call a skill with /name',
+  codex: 'Call a skill with $name, or pick one from /skills',
+  gemini: 'Chosen by the agent. /skills list shows what it has',
+  cursor: 'Type / and pick the skill',
+  antigravity: 'Chosen by the agent; there is no direct command',
+  generic: 'Read by Codex, Gemini CLI and Cursor',
 };
 
 @Component({ selector: 'af-board', imports: [RouterLink], templateUrl: './board.html' })
 export class Board implements OnInit, OnDestroy {
   s = inject(Store);
+  private router = inject(Router);
   agents = AGENTS;
   agentIds = Object.keys(AGENTS);
+  invoke = INVOKE;
   private bay = viewChild<ElementRef<HTMLElement>>('bay');
   private observed: HTMLElement | null = null;
   cables = signal<Cable[]>([]);
@@ -46,49 +47,40 @@ export class Board implements OnInit, OnDestroy {
   wireDocs = signal(true);
   wireCopy = signal(false);
 
-  // Collisions
-  showAllCollisions = signal(false);
-  collisions = computed(() => {
-    const all = this.realClashes();
-    return this.showAllCollisions() ? all : all.slice(0, 5);
-  });
-
-  /** Identical copies are not a decision, so they never get a row. */
-  realClashes = computed(() => (this.s.catalog()?.collisions || []).filter(c => c.kind !== 'identical'));
   pendingAttach = computed(() => this.s.tray().filter(i => i.change.kind === 'source.attach'));
   pendingProjects = computed(() => this.s.tray().filter(i => i.change.kind === 'project.add'));
+  /** At most five rows in the panel; the Skills page has the rest. */
+  attentionRows = computed(() => this.s.attention().slice(0, 5));
+  /** The order only matters, and is only shown, once there is something to order. */
+  showOrder = computed(() => this.s.attached().length > 0);
+  /** Worth showing once the library is big enough for the budget to bite, or whenever it already does. */
+  showBudget = computed(() => { const h = this.s.catalog()?.health; return !!h && (!h.budget.fits || h.budget.entries > 50); });
+  problemCount = computed(() => { const h = this.s.catalog()?.health; return h ? new Set(h.findings.filter(f => f.severity !== 'info').map(f => f.skillId)).size : 0; });
 
   constructor() {
     afterRenderEffect(() => {
       // Re-measure whenever anything that moves a socket changes.
-      this.s.catalog(); this.s.tray(); this.attachOpen(); this.projectOpen(); this.wiring(); this.showAllCollisions();
+      this.s.catalog(); this.s.tray(); this.attachOpen(); this.projectOpen(); this.wiring();
       untracked(() => this.draw());
     });
   }
 
-  ngOnInit() {
-    this.observer = new ResizeObserver(() => untracked(() => this.draw()));
-  }
+  ngOnInit() { this.observer = new ResizeObserver(() => untracked(() => this.draw())); }
   ngOnDestroy() { this.observer?.disconnect(); }
 
-  feeds(t: TargetReport) { return FEEDS[t.feeds]; }
-  /** Agents worth a row: anything wired, broken, copied or about to be wired. */
-  shown(report: ProjectReport) { return report.targets.filter(t => t.feeds !== 'none' || this.plannedFor(report.project.id, t.id)); }
-  unwired(report: ProjectReport) { return report.targets.filter(t => t.feeds === 'none' && !this.plannedFor(report.project.id, t.id)).map(t => AGENTS[t.id]).join(', '); }
-  needsRepoint(t: TargetReport) { return t.feeds === 'vault' || t.feeds === 'elsewhere' || t.feeds === 'broken'; }
-  plannedFor(projectId: string, target: string) {
-    return this.s.pendingFor('project.wire', a => a['projectId'] === projectId && Array.isArray(a['targets']) && (a['targets'] as string[]).includes(target)).length > 0;
-  }
+  // ─── sources ───────────────────────────────────────────────────────────────
+  label(src: Source) { return src.kind === 'primary' ? 'Your vault' : src.name; }
   plannedSource(source: Source) {
     return this.s.pendingFor('source.detach', a => a['name'] === source.key).length ? 'Will be detached'
       : this.s.pendingFor('source.fetch', a => a['name'] === source.key || !a['name']).length ? 'Will be fetched' : '';
   }
-  plannedChoice(skill: string) { return this.s.pendingFor('library.prefer', a => a['skill'] === skill)[0]?.change.args?.['source'] as string | undefined; }
   sourceState(s: Source) {
     if (s.state === 'available') return s.count === 1 ? '1 skill' : `${s.count ?? 0} skills`;
     return { missing: 'Folder is missing', 'not-fetched': 'Not downloaded yet', unreadable: 'Cannot be read', rejected: 'Outside the allowed folders' }[s.state] || s.state;
   }
   short(rev: string | null) { return rev ? rev.slice(0, 7) : ''; }
+
+  // ─── library ───────────────────────────────────────────────────────────────
   shade(i: number) { return `var(--mix-${Math.min(i, 5)})`; }
   libraryStatus() {
     const l = this.s.catalog()?.library; if (!l) return { text: '', tone: 'muted' };
@@ -98,6 +90,51 @@ export class Board implements OnInit, OnDestroy {
     if (l.inSync) return { text: 'Up to date', tone: 'live' };
     const parts = [l.add.length && `${l.add.length} to add`, l.change.length && `${l.change.length} to switch`, l.remove.length && `${l.remove.length} to remove`].filter(Boolean);
     return { text: `Out of date: ${parts.join(', ')}`, tone: 'caution' };
+  }
+  /** Share of descriptions an agent will actually be shown. Higher is better. */
+  budgetPercent() { const b = this.s.catalog()?.health?.budget; if (!b) return 100; const described = b.entries - b.withoutDescription; return described ? Math.round((b.kept / described) * 100) : 100; }
+  showSkills(view: SkillView) { this.s.view.set(view); this.s.page.set(0); this.s.sourceFilter.set(''); this.s.skillQuery.set(''); void this.router.navigateByUrl('/library'); }
+  clashLine(col: Collision) {
+    const c = this.s.catalog(); if (!c) return '';
+    const winner = this.s.skillById(col.winnerId);
+    const using = winner ? this.s.sourceName(winner.sourceId) : '';
+    if (col.kind === 'changed') {
+      const who = col.changedSourceIds.map(id => this.s.sourceName(id)).join(' and ');
+      return `Using ${using}. ${who || 'A copy'} changed since you chose.`;
+    }
+    return col.candidateIds.map(id => this.s.skillById(id)).filter(Boolean).map(sk => this.s.sourceName(sk!.sourceId)).join(' and ');
+  }
+  plannedChoice(skill: string) { return this.s.pendingFor('library.prefer', a => a['skill'] === skill).length > 0; }
+
+  // ─── projects ──────────────────────────────────────────────────────────────
+  /** What an agent actually reads, in words, with the tone that colours its socket. */
+  state(t: TargetReport): { text: string; tone: Tone } {
+    switch (t.feeds) {
+      case 'library': return { text: 'Reads the library', tone: 'live' };
+      case 'vault': return { text: 'Reads your vault only', tone: 'caution' };
+      case 'elsewhere': return { text: 'Reads another folder', tone: 'caution' };
+      case 'broken': return { text: 'Link is broken', tone: 'fault' };
+      case 'needs-copy': return { text: `Linked, but ${AGENTS[t.id]} does not follow links. It needs a copy`, tone: 'caution' };
+      case 'copy':
+        if (t.copy?.state === 'fresh') return { text: 'Has a copy of the library, up to date', tone: 'live' };
+        if (t.copy?.state === 'stale') return { text: 'Its copy is out of date: the library changed since', tone: 'caution' };
+        return { text: `Has its own folder (${t.entries ?? 0} skills), not managed here`, tone: 'muted' };
+      case 'blocked': return { text: 'A file is in the way', tone: 'fault' };
+      case 'unreadable': return { text: 'Cannot be read', tone: 'fault' };
+      default: return { text: 'Not wired', tone: 'muted' };
+    }
+  }
+  /** Skills reach the agent: show how to call one. */
+  working(t: TargetReport) { return t.feeds === 'library' || (t.feeds === 'copy' && t.copy?.state === 'fresh'); }
+  /** Agents worth a row: anything wired, broken, copied or about to be wired. */
+  shown(report: ProjectReport) { return report.targets.filter(t => t.feeds !== 'none' || this.plannedFor(report.project.id, t.id)); }
+  /** Opt-in agents are offered in the wire form, not listed here as missing. */
+  unwired(report: ProjectReport) { return report.targets.filter(t => t.feeds === 'none' && !t.optIn && !this.plannedFor(report.project.id, t.id)).map(t => AGENTS[t.id]).join(', '); }
+  needsRepoint(t: TargetReport) { return t.feeds === 'vault' || t.feeds === 'elsewhere' || t.feeds === 'broken'; }
+  needsCopy(t: TargetReport) { return t.feeds === 'needs-copy'; }
+  staleCopy(t: TargetReport) { return t.feeds === 'copy' && t.copy?.state === 'stale'; }
+  plannedFor(projectId: string, target: string) {
+    return this.s.pendingFor('project.wire', a => a['projectId'] === projectId && Array.isArray(a['targets']) && (a['targets'] as string[]).includes(target)).length > 0;
   }
 
   // ─── actions ───────────────────────────────────────────────────────────────
@@ -113,7 +150,7 @@ export class Board implements OnInit, OnDestroy {
     this.s.addProject(p); this.projectOpen.set(false); this.projectPath.set('');
   }
   openWire(report: ProjectReport) {
-    const keep = report.targets.filter(t => t.feeds === 'library').map(t => t.id);
+    const keep = report.targets.filter(t => this.working(t)).map(t => t.id);
     this.wireTargets.set(new Set(keep.length ? keep : ['claude']));
     this.wireDocs.set(true); this.wireCopy.set(false);
     this.wiring.set(report.project.id);
@@ -125,7 +162,6 @@ export class Board implements OnInit, OnDestroy {
     this.s.wire(report.project.id, targets, { writeDocs: this.wireDocs(), link: this.wireCopy() ? 'copy' : 'auto' });
     this.wiring.set('');
   }
-  choose(skill: string, sourceId: string) { this.s.prefer(skill, this.s.sourceById(sourceId)); }
 
   // ─── cables ────────────────────────────────────────────────────────────────
   private draw() {
@@ -142,6 +178,7 @@ export class Board implements OnInit, OnDestroy {
       const dx = Math.max(36, (b.x - a.x) * 0.5);
       return `M${a.x.toFixed(1)},${a.y.toFixed(1)} C${(a.x + dx).toFixed(1)},${a.y.toFixed(1)} ${(b.x - dx).toFixed(1)},${b.y.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`;
     };
+    const stub = (b: { x: number; y: number }) => `M${(b.x - 64).toFixed(1)},${b.y.toFixed(1)} L${b.x.toFixed(1)},${b.y.toFixed(1)}`;
     const c = this.s.catalog(); const out: Cable[] = [];
     const libIn = jack('lib-in'), libOut = jack('lib-out');
     if (c && libIn && libOut) {
@@ -161,10 +198,11 @@ export class Board implements OnInit, OnDestroy {
           const b = jack(`tgt:${report.project.id}:${t.id}`); if (!b) continue;
           const id = `tgt:${report.project.id}:${t.id}`;
           if (this.plannedFor(report.project.id, t.id)) { out.push({ id, d: curve(libOut, b), tone: 'planned', stub: false }); continue; }
+          // A cable means "this feeds that". A copy carries skills but is not connected, so it gets a socket state and no cable.
           if (t.feeds === 'library') out.push({ id, d: curve(libOut, b), tone: 'live', stub: false });
           else if (t.feeds === 'vault' && vault) { const a = jack(`src:${vault.id}`); if (a) out.push({ id, d: curve(a, b), tone: 'caution', stub: false }); }
-          else if (t.feeds === 'elsewhere') out.push({ id, d: `M${(b.x - 64).toFixed(1)},${b.y.toFixed(1)} L${b.x.toFixed(1)},${b.y.toFixed(1)}`, tone: 'caution', stub: true });
-          else if (t.feeds === 'broken') out.push({ id, d: `M${(b.x - 64).toFixed(1)},${b.y.toFixed(1)} L${b.x.toFixed(1)},${b.y.toFixed(1)}`, tone: 'fault', stub: true });
+          else if (t.feeds === 'elsewhere' || t.feeds === 'needs-copy') out.push({ id, d: stub(b), tone: 'caution', stub: true });
+          else if (t.feeds === 'broken') out.push({ id, d: stub(b), tone: 'fault', stub: true });
         }
       }
     }

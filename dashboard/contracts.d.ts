@@ -57,7 +57,7 @@ export interface SkillComparison {
 }
 export interface SkillDocument { id: string; sourceId: string; relativePath: string; text: string; readAt: string }
 
-export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire';
+export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire';
 export interface Change { kind: ChangeKind; args?: Record<string, unknown> }
 export interface ChangeLine { tone: 'add' | 'remove' | 'change' | 'note' | 'warn'; text: string }
 export interface ChangePreview { kind: ChangeKind; title: string; lines: ChangeLine[]; conflicts: string[]; ok: boolean; args?: Record<string, unknown> }
