@@ -199,3 +199,32 @@ test('HTTP: changes need same Origin, both headers and JSON; previews never writ
   assert.equal(JSON.parse(applied.body).results[0].status, 'applied');
   assert.equal(inspectDestination(path.join(f.homedir, '.agentforge', 'merged-skills', 'sql-review')).kind, 'link');
 });
+
+test('one failing fetch or refused check does not cancel the others; any other failure still stops what follows', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.registry, JSON.stringify({ repositories: [...f.repos,
+    { name: 'down', type: 'git', url_or_path: 'https://example.com/down.git' },
+    { name: 'up', type: 'git', url_or_path: 'https://example.com/up.git' }] }));
+  // Stands in for Git: one host cannot be reached, the other clones.
+  const git = { clone: (url, dest) => { if (/down/.test(url)) throw new Error('could not resolve host'); fs.mkdirSync(dest, { recursive: true }); }, pull() {}, revision: () => 'abc1234' };
+  const svc = new WriteService({ ...f.options, git });
+
+  const fetched = apply(svc, { kind: 'source.fetch', args: { name: 'down' } }, { kind: 'source.fetch', args: { name: 'up' } }, { kind: 'library.rebuild' });
+  assert.deepEqual(fetched.map(r => r.status), ['failed', 'applied', 'applied'], 'the unreachable source is reported, the other is fetched, the library is still rebuilt');
+  assert.match(fetched[0].lines[0].text, /"down" could not be fetched: could not resolve host/);
+  assert.match(fetched[1].lines[0].text, /"up" downloaded at abc1234/);
+
+  // A check that cannot be made (the agent is not wired) is refused for that agent only.
+  const project = new ReadService(f.options).refresh().projects[0];
+  const asked = [];
+  const tool = new WriteService({ ...f.options, verifyRun: (command) => { asked.push(command); return fs.readdirSync(path.join(f.project, '.claude', 'skills')).join('\n'); } });
+  const checks = apply(tool,
+    { kind: 'project.verify', args: { projectId: project.project.id, target: 'gemini' } },
+    { kind: 'project.verify', args: { projectId: project.project.id, target: 'claude' } });
+  assert.deepEqual(checks.map(r => r.status), ['refused', 'applied']);
+  assert.deepEqual(asked, ['claude'], 'only the agent that could be checked was asked');
+
+  // Every other kind of change keeps the old rule: when one cannot be made, nothing after it runs.
+  const stopped = apply(svc, { kind: 'source.detach', args: { name: 'nothing' } }, { kind: 'library.rebuild' });
+  assert.deepEqual(stopped.map(r => r.status), ['refused', 'skipped']);
+});

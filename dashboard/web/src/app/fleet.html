@@ -38,6 +38,12 @@
     }
   </section>
 
+  <section class="all-actions" aria-label="Do everything at once">
+    <button type="button" class="quiet" (click)="fetchAll()" [disabled]="!toFetchAll().length || s.applying()">Fetch all updates ({{ toFetchAll().length }})</button>
+    <button type="button" class="quiet" (click)="checkAll()" [disabled]="!toCheckAll().length || s.applying()">Check all agents ({{ toCheckAll().length }})</button>
+    <p class="fine">Each becomes one list to review. A source or agent that fails does not stop the others. Checking sends one short question per agent, on your account, only when you apply.</p>
+  </section>
+
   <div class="filters">
     <div class="field grow">
       <label for="fleet-search">Search</label>

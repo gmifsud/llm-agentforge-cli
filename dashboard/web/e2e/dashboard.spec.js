@@ -696,3 +696,56 @@ test('fleet: at a laptop width Both puts the two lists side by side, and the oth
   await layout.getByRole('button', { name: 'Both' }).click();
   await expect(sources).toBeVisible(); await expect(projects).toBeVisible();
 });
+
+test('fleet: Fetch all updates queues every Git source and one rebuild; Check all agents is off when no agent is ready to ask', async ({ page }) => {
+  fs.writeFileSync(f.registry, JSON.stringify({ repositories: [...f.repos,
+    { name: 'team-skills', type: 'git', url_or_path: 'https://example.com/team/skills.git' },
+    { name: 'other-skills', type: 'git', url_or_path: 'https://example.com/other/skills.git' }] }));
+  await page.goto(`${app.url}/`);
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expect(page.getByRole('button', { name: 'Fetch all updates (2)' })).toBeEnabled();
+  // In this workspace no agent reads the library yet, so there is nothing to check.
+  await expect(page.getByRole('button', { name: 'Check all agents (0)' })).toBeDisabled();
+
+  const before = contentSnapshot(f.root);
+  await page.getByRole('button', { name: 'Fetch all updates (2)' }).click();
+  await expect(tray(page).locator('ol.steps > li.step')).toHaveCount(3);       // two fetches and a single rebuild
+  await expect(tray(page)).toContainText('The exception is a fetch or a check');
+  await expect(page.getByRole('button', { name: 'Fetch all updates (0)' })).toBeDisabled();
+  expect(contentSnapshot(f.root)).toEqual(before);
+  await page.getByRole('button', { name: 'Discard all' }).click();
+});
+
+test('fleet: Check all agents asks for every working agent at once, and a rebuild offers to check the agents it affects', async ({ page }) => {
+  test.setTimeout(120000);
+  const { scaleFixture } = require('../../../tests/dashboard-scale-fixture');
+  const bigCleanup = [];
+  const sf = scaleFixture({ after: fn => bigCleanup.unshift(fn) }, { projects: 150 });
+  const big = await createDashboard({ options: sf.options });
+  try {
+    await page.goto(`${big.url}/`);
+    // Claude Code reads the library in 50 projects and Codex in 38: 88 agents the tool has not confirmed.
+    const all = page.getByRole('button', { name: 'Check all agents (88)' });
+    await expect(all).toBeEnabled({ timeout: 20000 });
+    await all.click();
+    const steps = tray(page).locator('ol.steps > li.step');
+    await expect(steps).toHaveCount(88);
+    await expect(tray(page)).toContainText('88 checks ask an agent');
+    await expect(tray(page)).toContainText('Nothing runs until you press Apply');
+    await expect(page.getByRole('button', { name: 'Check all agents (0)' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Apply 88 changes' })).toBeEnabled({ timeout: 90000 });
+    await page.getByRole('button', { name: 'Discard all' }).click();
+
+    // A rebuild changes what those agents read, so it offers to check them; taking the offer adds them once.
+    await page.getByRole('article', { name: 'Library' }).getByRole('button', { name: 'Rebuild the library' }).click();
+    await expect(steps).toHaveCount(1);
+    await expect(tray(page)).toContainText('Rebuilding the library changes what 88 agents read');
+    await tray(page).getByRole('button', { name: 'Add 88 checks to this list' }).click();
+    await expect(steps).toHaveCount(89);
+    await expect(tray(page).getByRole('button', { name: /^Add \d+ checks/ })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Discard all' }).click();
+  } finally {
+    outbound = outbound.filter(u => !u.startsWith(big.url));
+    await big.close(); for (const fn of bigCleanup) await fn();
+  }
+});

@@ -450,3 +450,9 @@ a.button:hover { border-color: var(--ink); }
 af-library-card { display: contents; }
 .library-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1rem; align-items: start; margin-bottom: 1.25rem; }
 .group-line .button { flex: none; white-space: nowrap; margin-right: .6rem; }
+
+/* ─── doing everything at once, and the offers in the review sheet ──────────────────────────── */
+.all-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin-bottom: 1rem; }
+.all-actions p { flex: 1 1 24rem; margin: 0; }
+.tray .offer { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin: 0 0 .75rem; padding: .6rem .8rem; border: 1px dashed var(--planned); background: var(--planned-tint); }
+.tray .offer p { margin: 0; flex: 1 1 18rem; }

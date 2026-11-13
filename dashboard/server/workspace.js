@@ -13,25 +13,8 @@ const { failure } = require('../../src/domain/errors');
 const IS_WIN = process.platform === 'win32';
 const nameKey = (name) => (IS_WIN ? name.toLowerCase() : name);
 
-function projectsFile(paths) { return path.join(paths.agentforgeDir, 'projects.json'); }
-
-function loadSavedProjects(paths) {
-  const file = projectsFile(paths);
-  if (!fs.existsSync(file)) return [];
-  let parsed;
-  try { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {
-    throw failure('CONFIG_CORRUPT', `${file} is not valid JSON. Fix or move it; the dashboard will not overwrite it.`);
-  }
-  if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some((p) => typeof p !== 'string' || !path.isAbsolute(p))) {
-    throw failure('CONFIG_INVALID', `${file} must look like {"projects": ["<absolute folder>", ...]}.`);
-  }
-  return parsed.projects;
-}
-
-function saveSavedProjects(paths, list) {
-  fs.mkdirSync(paths.agentforgeDir, { recursive: true });
-  atomicWrite(projectsFile(paths), JSON.stringify({ projects: list }, null, 2) + '\n');
-}
+// The remembered project list moved into the core so the CLI can read it too; the dashboard keeps using these names.
+const { projectsFile, loadSavedProjects, saveSavedProjects } = require('../../src/infra/projects');
 
 function saveConfig(paths, config) {
   fs.mkdirSync(paths.agentforgeDir, { recursive: true });

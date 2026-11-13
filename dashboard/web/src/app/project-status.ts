@@ -1,4 +1,4 @@
-import { AGENTS, type ProjectReport } from './store';
+import { AGENTS, type ProjectReport, type TargetReport } from './store';
 import { agentState, isVerified, isWorking, type Tone } from './agent-status';
 
 /** How a project reads at a glance, how projects are grouped by folder, and how they are filtered. */
@@ -104,3 +104,14 @@ export function groupRows(rows: ProjectRow[]): ProjectGroup[] {
 }
 export const groupHealth = (g: ProjectGroup) => worstHealth(g.rows.map(r => r.summary.health));
 export const groupAttention = (g: ProjectGroup) => g.rows.filter(r => needsAttention(r.summary.health)).length;
+
+export interface CheckItem { projectId: string; target: string }
+/**
+ * Every working agent in these projects that the tool has not confirmed, leaving out checks already waiting in the review
+ * sheet. `only` narrows which agents count, for example only those that read the library through a link.
+ */
+export function pendingChecks(reports: ProjectReport[], waiting: (item: CheckItem) => boolean, only: (t: TargetReport) => boolean = () => true): CheckItem[] {
+  return reports
+    .flatMap(r => verifiableTargets(r).filter(only).map(t => ({ projectId: r.project.id, target: t.id })))
+    .filter(item => !waiting(item));
+}

@@ -16,6 +16,9 @@ const STAGE: Record<ChangeKind, number> = {
   'library.rebuild': 2, 'project.add': 3, 'project.forget': 3, 'project.wire': 4, 'project.verify': 5,
 };
 
+/** Steps that stand alone, as on the server: a fetch or a check that cannot be made does not cancel the others. */
+const INDEPENDENT = new Set<ChangeKind>(['source.fetch', 'project.verify']);
+
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
 
@@ -45,6 +48,8 @@ export class Store {
   tray = signal<TrayItem[]>([]);
   trayOpen = signal(false);
   applying = signal(false);
+  /** While applying: how many steps have finished, out of how many. */
+  applyProgress = signal<{ done: number; total: number } | null>(null);
   results = signal<ChangeResult[] | null>(null);
   applyError = signal('');
   private uid = 0;
@@ -241,14 +246,35 @@ export class Store {
   }
   private nextUnchecked() { return this.tray().find(i => !i.preview && !i.error); }
 
+  /**
+   * Runs the review sheet one step at a time, each as its own request. A single request has a time limit and a size
+   * limit, and one check of an agent can take minutes; one step per request keeps every step inside both, lets the page
+   * show progress, and means a list of a hundred checks is not refused for its length.
+   * Each step is still planned again against the disk just before it runs. As on the server, a fetch or a check that
+   * cannot be made does not cancel the others; any other step that cannot be made stops what follows.
+   */
   async apply() {
     if (this.applying() || this.blocked() || !this.tray().length) return;
-    this.applying.set(true); this.applyError.set('');
+    const items = this.tray();
+    const results: ChangeResult[] = [];
+    const notRun = (item: TrayItem, why: string): ChangeResult => ({ kind: item.change.kind, title: item.preview?.title || item.change.kind, status: 'skipped', lines: [], message: why });
+    this.applying.set(true); this.applyError.set(''); this.applyProgress.set({ done: 0, total: items.length });
+    let stopped = false;
     try {
-      const res = await this.post<ApplyResponse>('/changes/apply', { changes: this.tray().map(i => i.change) });
-      this.results.set(res.results);
-    } catch (e) { this.applyError.set(message(e)); }
-    finally { this.applying.set(false); }
+      for (const [i, item] of items.entries()) {
+        if (stopped) { results.push(notRun(item, 'Not run because an earlier change did not apply.')); continue; }
+        const res = await this.post<ApplyResponse>('/changes/apply', { changes: [item.change] });
+        const outcome = res.results[0];
+        results.push(outcome);
+        if (outcome.status !== 'applied' && !INDEPENDENT.has(item.change.kind)) stopped = true;
+        this.applyProgress.set({ done: i + 1, total: items.length });
+      }
+    } catch (e) {
+      this.applyError.set(message(e));
+      // What already ran stays on record; the rest was never sent.
+      for (const item of items.slice(results.length)) results.push(notRun(item, 'Not run because the dashboard server stopped answering.'));
+    } finally { this.applying.set(false); this.applyProgress.set(null); }
+    this.results.set(results);
     await this.refresh();
   }
 

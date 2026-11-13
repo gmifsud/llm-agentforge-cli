@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupAttention, groupHealth, groupRows, matchesProjectFilter, matchesProjectQuery, pickState, projectCounts, projectRow, summarise, verifiableTargets, verifiedText, withPicked } from './project-status';
+import { groupAttention, groupHealth, groupRows, matchesProjectFilter, matchesProjectQuery, pendingChecks, pickState, projectCounts, projectRow, summarise, verifiableTargets, verifiedText, withPicked } from './project-status';
 import type { Feeds, ProjectReport, TargetReport } from './store';
 
 const target = (id: string, feeds: Feeds, over: Partial<TargetReport> = {}): TargetReport => ({
@@ -92,6 +92,22 @@ describe('what a bulk action would touch', () => {
     const after = withPicked(before, ['b', 'c'], true);
     expect([...before]).toEqual(['a']); expect([...after].sort()).toEqual(['a', 'b', 'c']);
     expect([...withPicked(after, ['a', 'c'], false)]).toEqual(['b']);
+  });
+});
+
+describe('checking every agent', () => {
+  const reports = [
+    report('/work/a', [target('claude', 'library'), target('codex', 'library', { verification: verified() })]),
+    report('/work/b', [target('claude', 'vault'), target('gemini', 'library')]),
+    report('/work/gone', [target('claude', 'library')], { state: 'missing' }),
+  ];
+  it('lists every working agent the tool has not confirmed, across projects', () => {
+    expect(pendingChecks(reports, () => false)).toEqual([{ projectId: '/work/a', target: 'claude' }, { projectId: '/work/b', target: 'gemini' }]);
+  });
+  it('leaves out checks already waiting, and can be narrowed to some agents', () => {
+    expect(pendingChecks(reports, i => i.target === 'claude')).toEqual([{ projectId: '/work/b', target: 'gemini' }]);
+    expect(pendingChecks(reports, () => false, t => t.id === 'gemini')).toEqual([{ projectId: '/work/b', target: 'gemini' }]);
+    expect(pendingChecks([], () => false)).toEqual([]);
   });
 });
 

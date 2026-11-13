@@ -170,7 +170,7 @@ agentforge repo fetch            # clone or fast-forward every git source; the v
 agentforge repo sync --no-fetch  # rebuild the view from what is on disk
 ```
 
-or both at once with `agentforge repo sync`. Fetch and build are separate so that an unattended job (a scheduled hook) can refresh the cache without changing what your projects see. A fetch that fails for one source reports it and exits 1; the others still update.
+or both at once with `agentforge update` (the same as `agentforge repo sync`). Fetch and build are separate so that an unattended job (a scheduled hook) can refresh the cache without changing what your projects see. A fetch that fails for one source reports it and exits 1; the others still update, and the library is still rebuilt from what is on disk.
 
 ### 6.2 See what a source contributes
 
@@ -239,6 +239,17 @@ agentforge doctor --json     # for scripts; exit 1 if the vault is unusable or a
 
 Doctor distinguishes *present* from *healthy*: a dangling link shows as `✗ broken` with the dead target, not as a tick.
 
+To ask the tools themselves, not just look at the links:
+
+```
+agentforge verify --path D:\Repos\my-app --target claude   # one agent in one project
+agentforge check                                           # every working agent in every project you have added
+agentforge check --dry-run                                 # list what would be asked, ask nothing
+agentforge check --path D:\Repos\my-app --json             # one project, for scripts
+```
+
+`check` asks each agent whose skills folder reaches the library, in every project in `~/.agentforge/projects.json` (the list the dashboard keeps). Most tools are sent one short question on your account, so use `--dry-run` first on a long list. Each agent is asked on its own: one that is not installed or does not answer is reported, and the rest are still asked. Exit 0 only when every agent confirmed. It writes nothing.
+
 ## 7. Using it from gd-tool-harness
 
 The harness (`gdt`) gives every command a risk level, a preview-then-apply gate, an approval pin and a ledger entry. Agentforge registers these tools:
@@ -277,6 +288,9 @@ agentforge repo remove <ID>
 agentforge repo list [--json]
 agentforge repo fetch [ID]
 agentforge repo sync [--vault V] [--force] [--no-fetch] [--dry-run]
+agentforge update [--vault V] [--force] [--no-fetch] [--dry-run]     # same as repo sync
+agentforge verify [--path P] [--target T] [--tool TOOL] [--json]
+agentforge check  [--path P] [--dry-run] [--json]
 agentforge help
 ```
 

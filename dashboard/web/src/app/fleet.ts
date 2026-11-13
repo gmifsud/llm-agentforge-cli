@@ -5,7 +5,7 @@ import { ProjectDetail } from './project-detail';
 import { SourceDetail } from './source-detail';
 import { AttachForm, ProjectForm } from './fleet-forms';
 import { LibraryCard } from './library-card';
-import { groupAttention, groupHealth, groupRows, matchesProjectFilter, matchesProjectQuery, pickState, projectCounts, projectRow, verifiableTargets, verifiedText, withPicked, type ProjectFilter, type ProjectGroup } from './project-status';
+import { groupAttention, groupHealth, groupRows, matchesProjectFilter, matchesProjectQuery, pendingChecks, pickState, projectCounts, projectRow, verifiableTargets, verifiedText, withPicked, type ProjectFilter, type ProjectGroup } from './project-status';
 import { matchesFilter, matchesQuery, sourceCounts, sourceLabel, sourceStatus, needsAttention, type SourceFilter } from './source-status';
 
 export type Layout = 'both' | 'sources' | 'projects';
@@ -103,6 +103,15 @@ export class Fleet {
   });
   fetchSelected() { this.s.fetchMany(this.toFetch()); }
   verifySelected() { this.s.verifyMany(this.toVerify()); }
+
+  // ─── everything at once ─────────────────────────────────────────────────────
+  /** Every Git source not already waiting to be fetched. */
+  toFetchAll = computed(() => this.s.attached().filter(src => src.kind === 'git' && !this.s.pendingFor('source.fetch', a => a['name'] === src.key || !a['name']).length));
+  /** Every working agent in every project that the tool has not confirmed, less checks already waiting. */
+  toCheckAll = computed(() => pendingChecks(this.allProjects().map(r => r.report),
+    i => this.s.pendingFor('project.verify', a => a['projectId'] === i.projectId && a['target'] === i.target).length > 0));
+  fetchAll() { this.s.fetchMany(this.toFetchAll()); }
+  checkAll() { this.s.verifyMany(this.toCheckAll()); }
 
   // ─── side panel ─────────────────────────────────────────────────────────────
   selection = signal<Selection | null>(null);

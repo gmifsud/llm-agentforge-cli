@@ -76,23 +76,78 @@ describe('client state', () => {
     expect(store.blocked()).toBe(true);
   });
 
-  it('apply sends every queued change in order, keeps results, then refreshes', async () => {
-    store.tray.set([
-      { uid: 1, change: { kind: 'source.attach', args: { location: 'D:\\x' } }, preview: ok('Attach') as any, error: '', deferred: false },
-      { uid: 2, change: { kind: 'library.rebuild' }, preview: ok('Rebuild') as any, error: '', deferred: true },
-    ]);
-    const run = store.apply();
-    const req = http.expectOne('/api/v1/changes/apply');
-    expect(req.request.body).toEqual({ changes: [{ kind: 'source.attach', args: { location: 'D:\\x' } }, { kind: 'library.rebuild' }] });
-    req.flush({ results: [{ kind: 'source.attach', title: 'Attach x', status: 'applied', lines: [], message: '' }, { kind: 'library.rebuild', title: 'Rebuild', status: 'applied', lines: [], message: '' }] });
-    await Promise.resolve(); await Promise.resolve();
+  const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+  const result = (kind: string, title: string, status: string) => ({ kind, title, status, lines: [], message: '' });
+  const tray = (...items: [string, any?][]) => store.tray.set(items.map(([kind, args], i) => ({ uid: i + 1, change: { kind, args } as any, preview: ok(`${kind} ${i + 1}`) as any, error: '', deferred: false })));
+  const refreshAfter = async (run: Promise<void>) => {
+    await settle();
     http.expectOne('/api/v1/context').flush({ readOnly: false, projects: [], platform: 'win32' });
-    await Promise.resolve();
+    await settle();
     http.expectOne('/api/v1/catalog').flush(catalog);
     await run;
+  };
+
+  it('apply sends one change per request, in order, shows progress, keeps the results, then refreshes', async () => {
+    tray(['source.attach', { location: 'D:\\x' }], ['library.rebuild']);
+    const run = store.apply();
+    expect(store.applyProgress()).toEqual({ done: 0, total: 2 });
+    const first = http.expectOne('/api/v1/changes/apply');
+    expect(first.request.body).toEqual({ changes: [{ kind: 'source.attach', args: { location: 'D:\\x' } }] });
+    first.flush({ results: [result('source.attach', 'Attach x', 'applied')] });
+    await settle();
+    expect(store.applyProgress()).toEqual({ done: 1, total: 2 });
+    const second = http.expectOne('/api/v1/changes/apply');
+    expect(second.request.body).toEqual({ changes: [{ kind: 'library.rebuild' }] });
+    second.flush({ results: [result('library.rebuild', 'Rebuild', 'applied')] });
+    await refreshAfter(run);
     expect(store.results()?.map(r => r.status)).toEqual(['applied', 'applied']);
+    expect(store.applyProgress()).toBeNull();
     store.finish();
     expect(store.tray()).toEqual([]);
+  });
+
+  it('a fetch or a check that fails does not stop the ones after it; any other failure does', async () => {
+    tray(['source.fetch', { name: 'down' }], ['source.fetch', { name: 'up' }], ['library.rebuild']);
+    let run = store.apply();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('source.fetch', 'Fetch updates for down', 'failed')] });
+    await settle();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('source.fetch', 'Fetch updates for up', 'applied')] });
+    await settle();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('library.rebuild', 'Rebuild', 'applied')] });
+    await refreshAfter(run);
+    expect(store.results()?.map(r => r.status)).toEqual(['failed', 'applied', 'applied']);
+    store.finish();
+
+    tray(['project.verify', { projectId: 'p1', target: 'gemini' }], ['project.verify', { projectId: 'p1', target: 'claude' }]);
+    run = store.apply();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('project.verify', 'Check Gemini CLI in p1', 'refused')] });
+    await settle();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('project.verify', 'Check Claude Code in p1', 'applied')] });
+    await refreshAfter(run);
+    expect(store.results()?.map(r => r.status)).toEqual(['refused', 'applied']);
+    store.finish();
+
+    // Anything else depends on what came before: nothing after a refusal is sent.
+    tray(['source.attach', { location: 'D:\\x' }], ['library.rebuild']);
+    run = store.apply();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('source.attach', 'Attach x', 'refused')] });
+    await refreshAfter(run);
+    http.expectNone('/api/v1/changes/apply');
+    expect(store.results()?.map(r => r.status)).toEqual(['refused', 'skipped']);
+    expect(store.results()?.[1].title).toBe('library.rebuild 2');
+    expect(store.results()?.[1].message).toMatch(/earlier change did not apply/);
+  });
+
+  it('if the server stops answering part way, what ran is kept and the rest is marked not run', async () => {
+    tray(['project.verify', { projectId: 'p1', target: 'claude' }], ['project.verify', { projectId: 'p2', target: 'claude' }], ['project.verify', { projectId: 'p3', target: 'claude' }]);
+    const run = store.apply();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('project.verify', 'Check Claude Code in p1', 'applied')] });
+    await settle();
+    http.expectOne('/api/v1/changes/apply').flush({ error: { message: 'down' } }, { status: 503, statusText: 'Unavailable' });
+    await refreshAfter(run);
+    expect(store.results()?.map(r => r.status)).toEqual(['applied', 'skipped', 'skipped']);
+    expect(store.results()?.[1].message).toMatch(/stopped answering/);
+    expect(store.applyError()).not.toBe('');
   });
 
   const src = (id: string, key: string, kind: 'primary' | 'local' = 'local') => ({ id, key, kind, name: key, location: key, root: key, state: 'available' as const, revision: null, count: 1, rejectionCount: 0, error: null });

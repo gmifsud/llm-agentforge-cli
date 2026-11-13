@@ -1,5 +1,6 @@
 import { Component, computed, inject } from '@angular/core';
 import { Store } from './store';
+import { pendingChecks } from './project-status';
 
 const TONE_LABEL: Record<string, string> = { add: 'Adds', remove: 'Removes', change: 'Changes', note: 'Note', warn: 'Check' };
 const STATUS_LABEL: Record<string, string> = { applied: 'Applied', refused: 'Refused', failed: 'Failed', skipped: 'Not run' };
@@ -25,6 +26,15 @@ const STATUS_LABEL: Record<string, string> = { applied: 'Applied', refused: 'Ref
       @if (s.trayOpen()) {
         <div class="tray-body" id="tray-body">
           @if (s.applyError()) { <p class="notice fault" role="alert">{{ s.applyError() }}</p> }
+          @if (!s.results() && checks()) {
+            <p class="fine">{{ checks() }} {{ checks() === 1 ? 'check asks' : 'checks ask' }} an agent's own tool whether it sees the skills. Most send one short question, on your account. Nothing runs until you press Apply, and each check runs on its own, so one that cannot be made does not stop the rest.</p>
+          }
+          @if (!s.results() && !s.applying() && offer().length; as n) {
+            <div class="offer">
+              <p>Rebuilding the library changes what {{ n }} {{ n === 1 ? 'agent reads' : 'agents read' }}. Check {{ n === 1 ? 'it' : 'them' }} afterwards?</p>
+              <button type="button" class="quiet tiny" (click)="s.verifyMany(offer())">Add {{ n === 1 ? '1 check' : n + ' checks' }} to this list</button>
+            </div>
+          }
           @if (s.results(); as results) {
             <ol class="steps">
               @for (r of results; track $index) {
@@ -56,7 +66,7 @@ const STATUS_LABEL: Record<string, string> = { applied: 'Applied', refused: 'Ref
                 </li>
               }
             </ol>
-            <p class="fine">Changes run in this order. Each one is checked against your folders again just before it runs; if one cannot be made, the ones after it are not run.</p>
+            <p class="fine">Changes run in this order, one at a time. Each one is checked against your folders again just before it runs. If one cannot be made, the ones after it are not run. The exception is a fetch or a check: one of those that fails never stops the others.</p>
           }
         </div>
       }
@@ -68,13 +78,25 @@ export class Tray {
   tone = TONE_LABEL;
   status = STATUS_LABEL;
   count(n: number) { return n === 1 ? '1 change' : `${n} changes`; }
+  /** Checks waiting in the sheet, for the note about what they ask. */
+  checks = computed(() => this.s.tray().filter(i => i.change.kind === 'project.verify').length);
+  /**
+   * A rebuild changes what every agent reading the library through a link sees, so offer to check those afterwards.
+   * Only offered while a rebuild is waiting; checks already in the sheet are not offered twice.
+   */
+  offer = computed(() => {
+    const c = this.s.catalog();
+    if (!c || !this.s.tray().some(i => i.change.kind === 'library.rebuild')) return [];
+    return pendingChecks(c.projects, i => this.s.pendingFor('project.verify', a => a['projectId'] === i.projectId && a['target'] === i.target).length > 0, t => t.feeds === 'library');
+  });
   heading = computed(() => {
     const results = this.s.results();
     if (results) {
       const applied = results.filter(r => r.status === 'applied').length;
       return applied === results.length ? `Applied ${this.count(applied)}` : `${applied} of ${results.length} applied`;
     }
-    if (this.s.applying()) return 'Applying your changes';
+    const progress = this.s.applyProgress();
+    if (this.s.applying()) return progress ? `Applying: ${progress.done} of ${progress.total} done` : 'Applying your changes';
     if (this.s.checking()) return 'Checking your changes';
     const n = this.s.tray().length;
     return this.s.blocked() ? `${this.count(n)}, one needs attention` : `${this.count(n)} ready to review`;

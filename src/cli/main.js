@@ -13,6 +13,8 @@ const { verifyTarget } = require('../application/verify');
 const { applyPlan, describeAction } = require('../deployment/apply');
 const { addSource, removeSource, listSources, fetchSources } = require('../application/sources');
 const { syncView } = require('../application/sync');
+const { planChecks, runChecks } = require('../application/check');
+const { loadSavedProjects } = require('../infra/projects');
 
 const HELP = `agentforge — bootstrap a repo with a token-optimised CLAUDE.md / AGENTS.md / GEMINI.md
 and a junction/symlink to the shared skill vault. Idempotent. Non-destructive unless --force.
@@ -25,6 +27,11 @@ Usage:
   agentforge doctor [--path P] [--vault V] [--json]
   agentforge verify [--path P] [--target T] [--tool claude|codex|gemini|cursor|antigravity] [--json]
                                              ask the agent tool itself whether it sees the wired skills
+  agentforge update [--vault V] [--force] [--no-fetch] [--dry-run]
+                                             fetch every Git source, then rebuild the library (same as repo sync)
+  agentforge check  [--path P] [--dry-run] [--json]
+                                             ask every working agent in every remembered project whether it sees
+                                             the skills; one that cannot be asked does not stop the rest
   agentforge repo add <url-or-path> [--name ID] [--branch B]
   agentforge repo remove <ID>
   agentforge repo list [--json]
@@ -70,6 +77,7 @@ function run(argv, {
   stderr = process.stderr,
   cwd = process.cwd(),
   git,
+  verifyRun,
 } = {}) {
   const log = createLogger(stdout, { color: Boolean(stdout.isTTY) && !env.NO_COLOR });
   const elog = createLogger(stderr, { color: Boolean(stderr.isTTY) && !env.NO_COLOR });
@@ -91,6 +99,10 @@ function run(argv, {
         return cmdDoctor({ paths, env, cwd, opts, log, elog, stdout });
       case 'verify':
         return cmdVerify({ cwd, opts, log, elog, stdout });
+      case 'update':
+        return cmdSync('agentforge update', { paths, env, opts, log, elog, git: gitClient });
+      case 'check':
+        return cmdCheck({ paths, cwd, opts, log, elog, stdout, verifyRun });
       case 'repo':
         return cmdRepo(positional, { paths, env, opts, log, elog, stdout, git: gitClient });
       default:
@@ -254,33 +266,74 @@ function cmdRepo(positional, { paths, env, opts, log, elog, stdout, git }) {
       const results = fetchSources({ paths, git, only: arg });
       return reportFetch(results, log, elog);
     }
-    case 'sync': {
-      log.step('agentforge repo sync');
-      const dryRun = Boolean(opts.dryRun);
-      const res = syncView({ paths, env, cliVault: opts.vault, forceExternal: Boolean(opts.force), fetch: !opts.noFetch, dryRun, git });
-      log.info(`Vault  : ${res.primaryRoot}`);
-      log.info(`View   : ${res.viewDir}`);
-      if (opts.force) log.warn('Mode   : --force (external skills override vault skills on name collision)');
-      if (dryRun) log.warn('Mode   : DRY RUN');
-      log.raw('');
-      let exit = res.fetch.length ? reportFetch(res.fetch, log, elog) : 0;
-      for (const c of res.view.collisions) {
-        const why = c.by === 'choice' ? (c.stale ? 'your choice; a copy has changed since, review it' : 'your choice') : c.by === 'order' ? 'source order' : 'default order';
-        log.warn(`${c.name}: kept ${c.kept}, dropped ${c.dropped} (${why})`);
-      }
-      if (res.view.identical.length) log.grey(`${res.view.identical.length} identical ${res.view.identical.length === 1 ? 'copy' : 'copies'} collapsed: ${res.view.identical.slice(0, 6).map((c) => c.name).join(', ')}${res.view.identical.length > 6 ? '…' : ''}`);
-      for (const r of res.view.rejected) log.grey(`rejected [${r.source}] ${r.path}: ${r.reason}`);
-      const bySource = {};
-      for (const e of res.view.entries) bySource[e.source] = (bySource[e.source] || 0) + 1;
-      const summary = Object.entries(bySource).map(([s, n]) => `${n} from ${s}`).join(', ');
-      if (dryRun) log.dry(`would link ${res.view.entries.length} skills (${summary})`);
-      else log.ok(`merged view built: ${res.linked} skills linked (${summary})`);
-      return exit;
-    }
+    case 'sync':
+      return cmdSync('agentforge repo sync', { paths, env, opts, log, elog, git });
     default:
       elog.err(`usage: agentforge repo <add|remove|list|fetch|sync> ...`);
       return 2;
   }
+}
+
+/** Fetch every Git source (one that fails does not stop the others), then rebuild the library. `update` and `repo sync` are this. */
+function cmdSync(title, { paths, env, opts, log, elog, git }) {
+  log.step(title);
+  const dryRun = Boolean(opts.dryRun);
+  const res = syncView({ paths, env, cliVault: opts.vault, forceExternal: Boolean(opts.force), fetch: !opts.noFetch, dryRun, git });
+  log.info(`Vault  : ${res.primaryRoot}`);
+  log.info(`View   : ${res.viewDir}`);
+  if (opts.force) log.warn('Mode   : --force (external skills override vault skills on name collision)');
+  if (dryRun) log.warn('Mode   : DRY RUN');
+  log.raw('');
+  let exit = res.fetch.length ? reportFetch(res.fetch, log, elog) : 0;
+  for (const c of res.view.collisions) {
+    const why = c.by === 'choice' ? (c.stale ? 'your choice; a copy has changed since, review it' : 'your choice') : c.by === 'order' ? 'source order' : 'default order';
+    log.warn(`${c.name}: kept ${c.kept}, dropped ${c.dropped} (${why})`);
+  }
+  if (res.view.identical.length) log.grey(`${res.view.identical.length} identical ${res.view.identical.length === 1 ? 'copy' : 'copies'} collapsed: ${res.view.identical.slice(0, 6).map((c) => c.name).join(', ')}${res.view.identical.length > 6 ? '…' : ''}`);
+  for (const r of res.view.rejected) log.grey(`rejected [${r.source}] ${r.path}: ${r.reason}`);
+  const bySource = {};
+  for (const e of res.view.entries) bySource[e.source] = (bySource[e.source] || 0) + 1;
+  const summary = Object.entries(bySource).map(([s, n]) => `${n} from ${s}`).join(', ');
+  if (dryRun) log.dry(`would link ${res.view.entries.length} skills (${summary})`);
+  else log.ok(`merged view built: ${res.linked} skills linked (${summary})`);
+  return exit;
+}
+
+// ─── check ───────────────────────────────────────────────────────────────────
+
+/**
+ * Ask every working agent in every remembered project (or just --path) whether its tool sees the skills.
+ * Each check runs on its own, so one that cannot be made does not stop the rest. Writes nothing.
+ */
+function cmdCheck({ paths, cwd, opts, log, elog, stdout, verifyRun }) {
+  const projects = opts.path ? [path.resolve(cwd, opts.path)] : loadSavedProjects(paths);
+  const items = projects.length ? planChecks({ projects, libraryRoot: paths.mergedSkills }) : [];
+  const where = (p) => path.relative(cwd, p) || p;
+  if (opts.dryRun) {
+    if (opts.json) { stdout.write(JSON.stringify(items.map((i) => ({ project: i.projectRoot, target: i.target })), null, 2) + '\n'); return 0; }
+    log.step('agentforge check');
+    if (!projects.length) { log.info('no projects to check'); log.grey('add projects in the dashboard, or use --path <folder>'); return 0; }
+    log.dry(`would ask ${items.length} ${items.length === 1 ? 'agent' : 'agents'}`);
+    for (const i of items) log.grey(`${where(i.projectRoot)}  ${i.target}`);
+    return 0;
+  }
+  if (!opts.json) {
+    log.step('agentforge check');
+    if (!projects.length) { log.info('no projects to check'); log.grey('add projects in the dashboard, or use --path <folder>'); return 0; }
+    log.info(`Asking ${items.length} ${items.length === 1 ? 'agent' : 'agents'} in ${projects.length} ${projects.length === 1 ? 'project' : 'projects'}; most send one short question on your account`);
+    log.raw('');
+  }
+  const results = runChecks(items, {
+    run: verifyRun,
+    onResult: (r) => { if (!opts.json) (r.level === 'verified' ? log.ok : elog.err)(`${where(r.project)}  ${r.target}: ${r.level === 'verified' ? r.detail : `${r.level}: ${r.detail}`}`); },
+  });
+  const failed = results.filter((r) => r.level !== 'verified').length;
+  if (opts.json) { stdout.write(JSON.stringify(results, null, 2) + '\n'); return failed ? 1 : 0; }
+  log.raw('');
+  if (failed) elog.err(`${failed} of ${results.length} agents did not confirm they see the skills`);
+  else if (results.length) log.ok(`all ${results.length} agents confirmed`);
+  else log.info('no agent reads the library yet, so there is nothing to ask');
+  return failed ? 1 : 0;
 }
 
 function reportFetch(results, log, elog) {

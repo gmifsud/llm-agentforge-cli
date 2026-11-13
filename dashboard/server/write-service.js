@@ -27,6 +27,8 @@ const { verifyTarget, DEFAULT_TOOL, TOOLS } = require('../../src/application/ver
 const { createHash } = require('node:crypto');
 
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
+/** Steps whose failure never cancels the others: updating one source, or asking one tool. */
+const INDEPENDENT = new Set(['source.fetch', 'project.verify']);
 const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
@@ -87,18 +89,20 @@ class WriteService {
     if (!Array.isArray(changes) || changes.length === 0 || changes.length > 50) throw bad('Send between 1 and 50 changes.');
     const results = [];
     let stopped = false;
+    // A fetch or a check stands alone, so when one cannot be made the rest still run. Anything else depends on what came before.
+    const stopsRun = (change) => !INDEPENDENT.has(change?.kind);
     for (const change of changes) {
       if (stopped) { results.push({ kind: change?.kind, title: titleFor(change), status: 'skipped', lines: [], message: 'Not run because an earlier change did not apply.' }); continue; }
       let plan;
-      try { plan = this.describe(change); } catch (e) { results.push({ kind: change?.kind, title: titleFor(change), status: 'refused', lines: [], message: message(e) }); stopped = true; continue; }
-      if (!plan.ok) { results.push({ kind: change.kind, title: plan.title, status: 'refused', lines: plan.lines, message: plan.conflicts.join(' ') }); stopped = true; continue; }
+      try { plan = this.describe(change); } catch (e) { results.push({ kind: change?.kind, title: titleFor(change), status: 'refused', lines: [], message: message(e) }); stopped = stopsRun(change); continue; }
+      if (!plan.ok) { results.push({ kind: change.kind, title: plan.title, status: 'refused', lines: plan.lines, message: plan.conflicts.join(' ') }); stopped = stopsRun(change); continue; }
       try {
         const outcome = plan.run();
         results.push({ kind: change.kind, title: plan.title, status: 'applied', lines: outcome?.lines || plan.lines, message: outcome?.message || '' });
-        if (outcome?.failed) { results[results.length - 1].status = 'failed'; stopped = true; }
+        if (outcome?.failed) { results[results.length - 1].status = 'failed'; stopped = stopsRun(change); }
       } catch (e) {
         results.push({ kind: change.kind, title: plan.title, status: e instanceof AgentforgeError && e.exitCode === 3 ? 'refused' : 'failed', lines: plan.lines, message: message(e) });
-        stopped = true;
+        stopped = stopsRun(change);
       }
     }
     return { results };
