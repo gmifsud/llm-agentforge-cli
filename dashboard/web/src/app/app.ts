@@ -9,7 +9,7 @@ import { Tray } from './tray';
   <header class="masthead">
     <a routerLink="/" class="wordmark">agentforge</a>
     <nav aria-label="Pages">
-      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" ariaCurrentWhenActive="page">Wiring</a>
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" ariaCurrentWhenActive="page">Fleet</a>
       <a routerLink="/library" routerLinkActive="active" ariaCurrentWhenActive="page">Skills</a>
     </nav>
     <p class="observed" role="status">

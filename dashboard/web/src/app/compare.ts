@@ -9,7 +9,7 @@ interface Row { skip?: number; left?: { n: number; text: string; changed: boolea
 
 /** Two copies of one skill, side by side, with one decision to make: which one your agents get. */
 @Component({ selector: 'af-compare', imports: [RouterLink, DatePipe], template: `
-  <a routerLink="/" class="link back-link">Back to wiring</a>
+  <a routerLink="/" class="link back-link">Back to Fleet</a>
   @if (clash(); as col) {
     <header class="page-head">
       <h1>{{ col.name }}</h1>

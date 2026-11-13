@@ -7,7 +7,7 @@ const { contained } = require('./read-service');
 const { API, API_HEADER, API_HEADER_VALUE, WRITE_HEADER, WRITE_ROUTES, HOST, ERROR, LIMITS, ReadError, errorDto } = require('./constants');
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.ico': 'image/x-icon', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
-const CLIENT_ROUTES = new Set(['/', '/library']);
+const CLIENT_ROUTES = new Set(['/', '/library', '/map', '/fleet']);
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

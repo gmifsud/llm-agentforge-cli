@@ -1,25 +1,30 @@
 import { Component, ElementRef, OnDestroy, OnInit, afterRenderEffect, computed, inject, signal, untracked, viewChild } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
-import { AGENTS, Store, type Source, type ProjectReport, type TargetReport, type Collision, type SkillView } from './store';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { MAP_PAGE, mapScope } from './map-scope';
+import { AGENTS, Store, type Source, type ProjectReport } from './store';
+import { LibraryCard } from './library-card';
+
+import { sourceLabel, sourceStatus } from './source-status';
+import { INVOKE, agentState, isVerified, isWorking, needsCopy, needsRepoint, staleCopy, unwiredNames, verifiedLine } from './agent-status';
 
 interface Cable { id: string; d: string; tone: 'live' | 'caution' | 'fault' | 'planned' | 'idle'; stub: boolean }
-type Tone = 'live' | 'caution' | 'fault' | 'muted';
 
-/** How a person calls a skill in each tool. Claude Code's was exercised for real; the rest are from each tool's documentation. */
-const INVOKE: Record<string, string> = {
-  claude: 'Call a skill with /name',
-  codex: 'Call a skill with $name, or pick one from /skills',
-  gemini: 'Chosen by the agent. /skills list shows what it has',
-  cursor: 'Type / and pick the skill',
-  antigravity: 'Chosen by the agent; there is no direct command',
-  generic: 'Read by Codex, Gemini CLI and Cursor',
-};
-
-@Component({ selector: 'af-board', imports: [RouterLink], templateUrl: './board.html' })
+@Component({ selector: 'af-board', imports: [RouterLink, LibraryCard], templateUrl: './board.html' })
 export class Board implements OnInit, OnDestroy {
   s = inject(Store);
-  private router = inject(Router);
+  private route = inject(ActivatedRoute);
   agents = AGENTS;
+
+  /** The map draws one project or one folder, chosen in Fleet, so cables stay readable however many projects there are. */
+  pageSize = MAP_PAGE;
+  private query = toSignal(this.route.queryParamMap, { requireSync: true });
+  groupKey = computed(() => this.query().get('group') || '');
+  scope = computed(() => mapScope(this.s.catalog()?.projects ?? [], { project: this.query().get('project'), group: this.query().get('group'), page: this.query().get('page') }));
+  /** The projects whose cables are drawn. */
+  projects = computed(() => this.scope().reports);
+  /** With nothing chosen, or something that is gone, no board is drawn. */
+  showBay = computed(() => this.scope().kind === 'project' || this.scope().kind === 'group');
   agentIds = Object.keys(AGENTS);
   invoke = INVOKE;
   private bay = viewChild<ElementRef<HTMLElement>>('bay');
@@ -37,10 +42,6 @@ export class Board implements OnInit, OnDestroy {
   isGit = computed(() => /^(https?:\/\/|ssh:\/\/|git@[^/:]+:)/i.test(this.location().trim()));
   suggestedName = computed(() => this.location().trim().replace(/[\\/]+$/, '').split(/[\\/:]/).pop()?.replace(/\.git$/i, '') || '');
 
-  // Add project form
-  projectOpen = signal(false);
-  projectPath = signal('');
-
   // Wire editor
   wiring = signal<string>('');
   wireTargets = signal<Set<string>>(new Set());
@@ -48,19 +49,13 @@ export class Board implements OnInit, OnDestroy {
   wireCopy = signal(false);
 
   pendingAttach = computed(() => this.s.tray().filter(i => i.change.kind === 'source.attach'));
-  pendingProjects = computed(() => this.s.tray().filter(i => i.change.kind === 'project.add'));
-  /** At most five rows in the panel; the Skills page has the rest. */
-  attentionRows = computed(() => this.s.attention().slice(0, 5));
   /** The order only matters, and is only shown, once there is something to order. */
   showOrder = computed(() => this.s.attached().length > 0);
-  /** Worth showing once the library is big enough for the budget to bite, or whenever it already does. */
-  showBudget = computed(() => { const h = this.s.catalog()?.health; return !!h && (!h.budget.fits || h.budget.entries > 50); });
-  problemCount = computed(() => { const h = this.s.catalog()?.health; return h ? new Set(h.findings.filter(f => f.severity !== 'info').map(f => f.skillId)).size : 0; });
 
   constructor() {
     afterRenderEffect(() => {
       // Re-measure whenever anything that moves a socket changes.
-      this.s.catalog(); this.s.tray(); this.attachOpen(); this.projectOpen(); this.wiring();
+      this.s.catalog(); this.s.tray(); this.attachOpen(); this.wiring(); this.projects();
       untracked(() => this.draw());
     });
   }
@@ -69,81 +64,28 @@ export class Board implements OnInit, OnDestroy {
   ngOnDestroy() { this.observer?.disconnect(); }
 
   // ─── sources ───────────────────────────────────────────────────────────────
-  label(src: Source) { return src.kind === 'primary' ? 'Your vault' : src.name; }
+  label = sourceLabel;
   plannedSource(source: Source) {
     return this.s.pendingFor('source.detach', a => a['name'] === source.key).length ? 'Will be detached'
       : this.s.pendingFor('source.fetch', a => a['name'] === source.key || !a['name']).length ? 'Will be fetched' : '';
   }
-  sourceState(s: Source) {
-    if (s.state === 'available') return s.count === 1 ? '1 skill' : `${s.count ?? 0} skills`;
-    return { missing: 'Folder is missing', 'not-fetched': 'Not downloaded yet', unreadable: 'Cannot be read', rejected: 'Outside the allowed folders' }[s.state] || s.state;
-  }
+  sourceState = sourceStatus;
   short(rev: string | null) { return rev ? rev.slice(0, 7) : ''; }
 
-  // ─── library ───────────────────────────────────────────────────────────────
-  shade(i: number) { return `var(--mix-${Math.min(i, 5)})`; }
-  libraryStatus() {
-    const l = this.s.catalog()?.library; if (!l) return { text: '', tone: 'muted' };
-    if (l.invalid) return { text: 'This folder holds files that are not links. Move them aside, then rebuild.', tone: 'fault' };
-    if (!l.built) return { text: 'Not built yet. Build it before wiring projects.', tone: 'caution' };
-    if (l.inSync === null) return { text: 'Cannot compare right now: a source is not available.', tone: 'caution' };
-    if (l.inSync) return { text: 'Up to date', tone: 'live' };
-    const parts = [l.add.length && `${l.add.length} to add`, l.change.length && `${l.change.length} to switch`, l.remove.length && `${l.remove.length} to remove`].filter(Boolean);
-    return { text: `Out of date: ${parts.join(', ')}`, tone: 'caution' };
-  }
-  /** Share of descriptions an agent will actually be shown. Higher is better. */
-  budgetPercent() { const b = this.s.catalog()?.health?.budget; if (!b) return 100; const described = b.entries - b.withoutDescription; return described ? Math.round((b.kept / described) * 100) : 100; }
-  showSkills(view: SkillView) { this.s.view.set(view); this.s.page.set(0); this.s.sourceFilter.set(''); this.s.skillQuery.set(''); void this.router.navigateByUrl('/library'); }
-  clashLine(col: Collision) {
-    const c = this.s.catalog(); if (!c) return '';
-    const winner = this.s.skillById(col.winnerId);
-    const using = winner ? this.s.sourceName(winner.sourceId) : '';
-    if (col.kind === 'changed') {
-      const who = col.changedSourceIds.map(id => this.s.sourceName(id)).join(' and ');
-      return `Using ${using}. ${who || 'A copy'} changed since you chose.`;
-    }
-    return col.candidateIds.map(id => this.s.skillById(id)).filter(Boolean).map(sk => this.s.sourceName(sk!.sourceId)).join(' and ');
-  }
-  plannedChoice(skill: string) { return this.s.pendingFor('library.prefer', a => a['skill'] === skill).length > 0; }
-
   // ─── projects ──────────────────────────────────────────────────────────────
-  /** What an agent actually reads, in words, with the tone that colours its socket. */
-  state(t: TargetReport): { text: string; tone: Tone } {
-    switch (t.feeds) {
-      case 'library': return { text: 'Reads the library', tone: 'live' };
-      case 'vault': return { text: 'Reads your vault only', tone: 'caution' };
-      case 'elsewhere': return { text: 'Reads another folder', tone: 'caution' };
-      case 'broken': return { text: 'Link is broken', tone: 'fault' };
-      case 'needs-copy': return { text: `Linked, but ${AGENTS[t.id]} does not follow links. It needs a copy`, tone: 'caution' };
-      case 'copy':
-        if (t.copy?.state === 'fresh') return { text: 'Has a copy of the library, up to date', tone: 'live' };
-        if (t.copy?.state === 'stale') return { text: 'Its copy is out of date: the library changed since', tone: 'caution' };
-        return { text: `Has its own folder (${t.entries ?? 0} skills), not managed here`, tone: 'muted' };
-      case 'blocked': return { text: 'A file is in the way', tone: 'fault' };
-      case 'unreadable': return { text: 'Cannot be read', tone: 'fault' };
-      default: return { text: 'Not wired', tone: 'muted' };
-    }
-  }
-  /** What the tool itself last said, in words. Null when it has never been asked. */
-  verified(t: TargetReport): { text: string; good: boolean } | null {
-    const v = t.verification; if (!v) return null;
-    const when = new Date(v.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-    if (v.level === 'verified') return v.stale ? { text: `Last verified ${when}; the skills have changed since`, good: false } : { text: `Verified ${when}`, good: true };
-    const said: Record<string, string> = { partial: 'saw only some of the skills', 'not-listed': 'did not see the skills', unreliable: 'gave an answer that cannot be trusted', 'not-wired': 'had nothing to check', unavailable: 'could not be asked' };
-    return { text: `Checked ${when}: the tool ${said[v.level] || 'did not confirm'}`, good: false };
-  }
-  isVerified(t: TargetReport) { return t.verification?.level === 'verified' && !t.verification.stale; }
+  // Wording and rules for one agent live in agent-status.ts, shared with the fleet view.
+  state = agentState;
+  verified = verifiedLine;
+  isVerified = isVerified;
+  working = isWorking;
+  needsRepoint = needsRepoint;
+  needsCopy = needsCopy;
+  staleCopy = staleCopy;
   plannedVerify(projectId: string, target: string) { return this.s.pendingFor('project.verify', a => a['projectId'] === projectId && a['target'] === target).length > 0; }
 
-  /** Skills reach the agent: show how to call one. */
-  working(t: TargetReport) { return t.feeds === 'library' || (t.feeds === 'copy' && t.copy?.state === 'fresh'); }
   /** Agents worth a row: anything wired, broken, copied or about to be wired. */
   shown(report: ProjectReport) { return report.targets.filter(t => t.feeds !== 'none' || this.plannedFor(report.project.id, t.id)); }
-  /** Opt-in agents are offered in the wire form, not listed here as missing. */
-  unwired(report: ProjectReport) { return report.targets.filter(t => t.feeds === 'none' && !t.optIn && !this.plannedFor(report.project.id, t.id)).map(t => AGENTS[t.id]).join(', '); }
-  needsRepoint(t: TargetReport) { return t.feeds === 'vault' || t.feeds === 'elsewhere' || t.feeds === 'broken'; }
-  needsCopy(t: TargetReport) { return t.feeds === 'needs-copy'; }
-  staleCopy(t: TargetReport) { return t.feeds === 'copy' && t.copy?.state === 'stale'; }
+  unwired(report: ProjectReport) { return unwiredNames(report, id => this.plannedFor(report.project.id, id)); }
   plannedFor(projectId: string, target: string) {
     return this.s.pendingFor('project.wire', a => a['projectId'] === projectId && Array.isArray(a['targets']) && (a['targets'] as string[]).includes(target)).length > 0;
   }
@@ -154,11 +96,6 @@ export class Board implements OnInit, OnDestroy {
     const location = this.location().trim(); if (!location) return;
     this.s.attach(location, this.name().trim(), this.branch().trim());
     this.attachOpen.set(false); this.location.set(''); this.name.set(''); this.branch.set('');
-  }
-  submitProject(event: Event) {
-    event.preventDefault();
-    const p = this.projectPath().trim(); if (!p) return;
-    this.s.addProject(p); this.projectOpen.set(false); this.projectPath.set('');
   }
   openWire(report: ProjectReport) {
     const keep = report.targets.filter(t => this.working(t)).map(t => t.id);
@@ -204,7 +141,7 @@ export class Board implements OnInit, OnDestroy {
         const a = jack(`ghost:${item.uid}`); if (a) out.push({ id: `ghost:${item.uid}`, d: curve(a, libIn), tone: 'planned', stub: false });
       }
       const vault = c.sources.find(s => s.kind === 'primary');
-      for (const report of c.projects) {
+      for (const report of this.projects()) {
         for (const t of report.targets) {
           const b = jack(`tgt:${report.project.id}:${t.id}`); if (!b) continue;
           const id = `tgt:${report.project.id}:${t.id}`;

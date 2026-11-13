@@ -148,6 +148,35 @@ describe('client state', () => {
     for (let n = 0; n < 4; n++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await Promise.resolve(); await Promise.resolve(); }
   });
 
+  it('fetching several sources queues one fetch each and a single rebuild; folders and the vault are left out', async () => {
+    store.catalog.set(catalog);
+    const git = (id: string, key: string) => ({ ...src(id, key), kind: 'git' as const });
+    store.fetchMany([git('g1', 'one'), git('g2', 'two'), src('l', 'folder'), src('v', 'vault', 'primary')] as any);
+    expect(store.tray().map(i => i.change)).toEqual([
+      { kind: 'source.fetch', args: { name: 'one' } }, { kind: 'source.fetch', args: { name: 'two' } }, { kind: 'library.rebuild' },
+    ]);
+    store.fetchMany([git('g1', 'one')] as any);                // the same again adds nothing, not even a second rebuild
+    expect(store.tray().length).toBe(3);
+    store.fetchMany([src('l', 'folder')] as any);              // nothing fetchable: not even a rebuild is queued
+    store.fetchMany([]);
+    expect(store.tray().length).toBe(3);
+    for (let n = 0; n < 6; n++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await Promise.resolve(); await Promise.resolve(); }
+  });
+
+  it('checking several agents queues one check each; the same check is never queued twice', async () => {
+    store.catalog.set(catalog);
+    store.verifyMany([{ projectId: 'p1', target: 'claude' }, { projectId: 'p1', target: 'codex' }, { projectId: 'p2', target: 'claude' }]);
+    expect(store.tray().map(i => i.change)).toEqual([
+      { kind: 'project.verify', args: { projectId: 'p1', target: 'claude' } },
+      { kind: 'project.verify', args: { projectId: 'p1', target: 'codex' } },
+      { kind: 'project.verify', args: { projectId: 'p2', target: 'claude' } },
+    ]);
+    store.verifyMany([{ projectId: 'p1', target: 'claude' }]);
+    store.verifyMany([]);
+    expect(store.tray().length).toBe(3);
+    for (let n = 0; n < 8; n++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await Promise.resolve(); await Promise.resolve(); }
+  });
+
   it('a comparison answer for an earlier request is ignored', async () => {
     store.catalog.set(clashCatalog());
     const first = store.compare('tdd-a', 'tdd-v');

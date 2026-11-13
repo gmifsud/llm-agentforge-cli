@@ -1,6 +1,6 @@
 # Agentforge dashboard
 
-The dashboard is the interactive way to use Agentforge. It shows where your skills come from, what is in the library, and which agent in which project reads it, as one board with cables between them. Everything you can do on the command line for sources, the library and projects, you can do here, and every change is shown as a plain-language plan before anything on disk moves.
+The dashboard is the interactive way to use Agentforge. It shows where your skills come from, what is in the library, and which agent in which project reads it, as searchable lists you can act on many at a time, and a cable map for one project or folder. Everything you can do on the command line for sources, the library and projects, you can do here, and every change is shown as a plain-language plan before anything on disk moves.
 
 ## Start it
 
@@ -23,19 +23,34 @@ Open the printed `http://127.0.0.1:<port>` address. Ctrl+C stops it. Options:
 
 Projects you add in the dashboard are remembered in `~/.agentforge/projects.json`, so you normally start it with no options.
 
-## The two pages
+## The pages
 
-### Wiring
+The dashboard is built for many sources and many projects. Lists you can search and filter come first, one item opens at a time in a side panel, and the cable map is drawn for one project or one folder at a time, so nothing becomes a tangle however much you manage.
 
-Three columns, left to right, in the order skills travel:
+### Fleet (the home page)
 
-| Column | Shows | You can |
+Everything you manage, in one place, top to bottom:
+
+| Part | Shows | You can |
 | :-- | :-- | :-- |
-| **Sources** | Your vault (always first, never written to) and every attached folder or Git repository, with how many skills each has and its state | Attach a repository, fetch updates for a Git source, detach |
-| **Library** | How many skills your agents can use, how many come from each source, and whether the library on disk matches what the sources would produce now | Build or rebuild it, choose which source wins when two have a skill with the same name, open the full skill list |
-| **Projects** | Each project folder and, for each agent in it, what that agent actually reads | Add a project, wire agents, repoint an agent that reads the wrong folder, remove a project from the list |
+| **Library** | How many skills your agents can use and from which sources, whether the library on disk is up to date, how many skill descriptions fit the listing budget, skills with problems, and personal skills that hide a library skill | Build or rebuild the library, browse all skills. A second card appears when two sources have a skill with the same name: it counts the clashes that need a look and links to **Compare** |
+| **Counts** | Sources, sources needing attention, sources not downloaded; projects, projects needing attention, projects with an agent the tool has not confirmed | Click a count to filter its list by it. Click it again, or **Clear**, to undo |
+| **Search and layout** | One search box for both lists, and **Both**, **Sources**, **Projects** | Choose how much to show. The choice is remembered in the browser. At a narrow width the two lists stack |
+| **Sources** | Your vault and every attached folder or Git repository, in priority order, with skills, state and revision | Open one, attach a repository, tick Git sources for a bulk action |
+| **Projects** | Projects grouped under their folder. Each row has one status (the worst thing about its agents), a chip per wired agent, and when the tool last confirmed it | Open one, add a project, tick projects or whole folders |
 
-The cables carry the state, and the same state is always written next to them in words:
+Things to know:
+
+- **Order matters, so sources are never sorted.** When two sources have the same skill, the higher one wins. *Up* and *Down* are disabled while a search or filter is active, because moving a source inside a partial list would reorder a view of the list, not the list.
+- **Folders.** A project is grouped under its parent folder, headed by the last two parts of that folder. Two different folders that would share a heading are shown by their full path. A list of more than 30 projects starts collapsed; **Expand all** and **Collapse all** are above it. While you search or filter, every folder with a match is open, so a collapsed folder never hides a result.
+- **Open one.** Click a name to open it in the side panel. For a source: kind, path, state, revision, its place in the order with *Move up* and *Move down*, *Show its skills*, *Fetch updates* (Git sources) and *Detach*. For a project: each agent's state, its instruction file, how to call a skill in that tool, the fix that applies (*Repoint*, *Copy instead*, *Refresh copy*, *Verify*), *Wire agents*, *Show wiring*, and *Remove from list* for projects you added. Esc or *Close details* returns focus to the row you came from; on a narrow screen the panel takes the place of the lists.
+- **Several at once.** Tick Git sources or projects (a folder's box ticks every project in it, a table header's box ticks everything showing). A bar shows what is selected with **Fetch selected** and **Verify selected**. Fetching queues one fetch per Git source and a single rebuild. Verifying queues one check for each working agent the tool has not confirmed, or confirmed before the skills changed, and sends one short question per agent, on your account, only when you apply. Both only queue changes for review, and work already in the review sheet is not counted twice. Selections you cannot currently see (filtered away, or in a list the layout hides) are counted as "not showing", so a bulk action never touches something out of sight without saying so.
+
+Agents are named for what they are: Claude Code (`CLAUDE.md`, `.claude/skills`), Codex (`AGENTS.md`, `.codex/skills`), Cursor and others (`AGENTS.md`, `.agents/skills`), Gemini CLI (`GEMINI.md`, `.gemini/skills`).
+
+### Wiring map
+
+How skills travel, drawn as cables: **Sources**, then the **Library**, then **Projects**. It has no menu entry. It draws **one project or one folder at a time**: open it from *Show wiring* in a project's panel, or the *Show wiring* link on a folder heading in Fleet. A folder is shown ten projects at a time, in name order, with *Previous 10* and *Next 10*. Without a choice it draws nothing and links back to Fleet; if what you chose is no longer in your list it says so.
 
 | Cable | Meaning |
 | :-- | :-- |
@@ -46,13 +61,13 @@ The cables carry the state, and the same state is always written next to them in
 | Dashed indigo | A change you queued but have not applied |
 | Dashed grey | A source that is not available (missing, or a Git source not downloaded yet) |
 
-Agents are named for what they are: Claude Code (`CLAUDE.md`, `.claude/skills`), Codex (`AGENTS.md`, `.codex/skills`), Cursor and others (`AGENTS.md`, `.agents/skills`), Gemini CLI (`GEMINI.md`, `.gemini/skills`).
+The same state is always written next to the cables in words. Repoint, copy, verify and wire work here exactly as in the panel, and each queues a change in the review sheet. On a narrow window, or zoomed in, the columns stack and the cables are hidden.
 
-On a narrow window, or zoomed in, the columns stack and the cables are hidden; every state is still in the text.
+The map's address is `/map?project=<id>` or `/map?group=<folder>&page=<n>`; a page outside the folder is brought back inside it. `/fleet`, the address the fleet view was first shown at, still arrives at the home page.
 
 ### Skills
 
-Every skill found in every source, searchable and filterable by source. Switch between *Everything found*, *In the library*, and *Name clashes*. Select a skill to see where it comes from, read its `SKILL.md` as plain text, and, when another source has a skill with the same name, choose which one your agents get. Folders that were skipped while looking for skills, and why, are listed under the table.
+Every skill found in every source, searchable and filterable by source. Switch between *Everything found*, *In the library*, *Name clashes*, *Need a look* and *Have problems*. Select a skill to see where it comes from, why it is or is not what your agents get, read its `SKILL.md` as plain text, and, when another source has a skill with the same name, compare the copies and choose which one your agents get. Folders that were skipped while looking for skills, and why, are listed under the table.
 
 ## How changes work
 
@@ -62,7 +77,7 @@ Nothing you click writes to disk directly. Each action adds one or more steps to
 2. Each step is checked against your folders and described in plain words: what will be written, linked, unlinked or deleted. Lines are colour-coded: green adds, red removes, indigo changes, amber needs your attention.
 3. If a step cannot be made, it says why, and *Apply* is disabled until you remove it. A step that only depends on an earlier queued step (wiring a project to a library a queued rebuild will create) is not treated as blocked.
 4. *Apply* runs the steps in order. Each one is planned again against the disk immediately before it runs, so a preview that went out of date cannot be applied blindly. If one step is refused or fails, the steps after it are not run.
-5. The sheet shows what actually happened for each step, then the board refreshes.
+5. The sheet shows what actually happened for each step, then the page refreshes.
 
 | Action | What it does | What it never does |
 | :-- | :-- | :-- |
@@ -95,7 +110,7 @@ From the repository root:
 npm test                 # core + server, including the write paths
 npm run dashboard:test   # client state, tray ordering, apply flow
 npm run dashboard:build
-npm run dashboard:e2e    # real browser: wiring, preview-without-write, attach, add, wire, repoint, refusals, zoom, focus
+npm run dashboard:e2e    # real browser: Fleet at 150 projects, side panel, bulk actions, scoped map, preview-without-write, repoint, verify, refusals, zoom, focus
 git diff --check
 ```
 

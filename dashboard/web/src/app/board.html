@@ -1,4 +1,24 @@
 @if (s.catalog(); as c) {
+  <header class="page-head">
+    <h1>Wiring@if (scope().title) { for {{ scope().title }} }</h1>
+    @switch (scope().kind) {
+      @case ('project') { <p>How this project's agents reach your skills.</p> }
+      @case ('group') {
+        <p role="status">Projects {{ scope().first }} to {{ scope().last }} of {{ scope().total }} in {{ scope().folder }}</p>
+        @if (scope().pages > 1) {
+          <nav class="pager scope-pager" aria-label="Projects in this folder">
+            @if (scope().page > 1) { <a class="button quiet tiny" routerLink="/map" [queryParams]="{ group: groupKey(), page: scope().page - 1 }">Previous {{ pageSize }}</a> }
+            <span>Page {{ scope().page }} of {{ scope().pages }}</span>
+            @if (scope().page < scope().pages) { <a class="button quiet tiny" routerLink="/map" [queryParams]="{ group: groupKey(), page: scope().page + 1 }">Next {{ pageSize }}</a> }
+          </nav>
+        }
+      }
+      @case ('missing') { <p>That project or folder is no longer in your list.</p> }
+      @default { <p>The map draws one project, or one folder, at a time, so it stays readable however many you have.</p> }
+    }
+    <p class="back-link"><a routerLink="/">{{ showBay() ? 'Back to Fleet' : 'Choose a project or a folder in Fleet' }}</a></p>
+  </header>
+@if (showBay()) {
 <section class="bay" #bay aria-label="Skill sources, library and projects">
   <svg class="cables" [class.settled]="animated()" aria-hidden="true" focusable="false"
        [attr.width]="size().w" [attr.height]="size().h" [attr.viewBox]="'0 0 ' + size().w + ' ' + size().h">
@@ -89,86 +109,7 @@
       <p>What your agents can use</p>
     </header>
 
-    <article class="module library" aria-label="Library">
-      <span class="jack in" data-jack="lib-in"></span>
-      <div class="library-total">
-        <strong>{{ s.libraryTotal() }}</strong>
-        <span>{{ s.libraryTotal() === 1 ? 'skill' : 'skills' }} from {{ s.contribution().length }} {{ s.contribution().length === 1 ? 'source' : 'sources' }}</span>
-      </div>
-      @if (s.contribution().length > 1) {
-        <div class="mix" role="img" [attr.aria-label]="'Library made of ' + s.contribution().length + ' sources'">
-          @for (part of s.contribution(); track part.source.id; let i = $index) {
-            <span [style.flex-grow]="part.count" [style.background]="shade(i)"></span>
-          }
-        </div>
-        <ul class="legend">
-          @for (part of s.contribution(); track part.source.id; let i = $index) {
-            <li><span class="swatch" [style.background]="shade(i)"></span>{{ label(part.source) }} <b>{{ part.count }}</b></li>
-          }
-        </ul>
-      }
-      @if (libraryStatus(); as st) { <p class="state" [class]="'state ' + st.tone" role="status">{{ st.text }}</p> }
-      <p class="path">{{ c.library.path }}</p>
-
-      @if (c.health; as h) {
-        @if (showBudget()) {
-          <div class="budget" [class.over]="!h.budget.fits">
-            <h4 id="h-budget">What your agents will see</h4>
-            <div class="meter" role="img" [attr.aria-label]="budgetPercent() + ' percent of skill descriptions fit'"><span [style.width.%]="budgetPercent()"></span></div>
-            @if (h.budget.fits) {
-              <p class="fine">Every description fits, so agents can pick any of these skills on their own.</p>
-            } @else {
-              <p>About {{ h.budget.kept }} of {{ h.budget.entries }} descriptions fit. The rest can still be called by name, but agents will not pick them on their own.</p>
-              <details><summary>Why this matters</summary>
-                <p class="fine">An agent chooses a skill by reading its description. Tools only load descriptions up to a budget; past it, the least-used are left out. Wiring fewer skills into a project keeps more of them visible.</p>
-              </details>
-            }
-          </div>
-        }
-        @if (problemCount()) {
-          <p class="health-line"><span class="state caution">{{ problemCount() }} {{ problemCount() === 1 ? 'skill has a problem' : 'skills have problems' }} in some tools</span>
-            <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show</button></p>
-        }
-        @if (h.shadows.length) {
-          <p class="health-line"><span class="state caution">{{ h.shadows.length }} personal {{ h.shadows.length === 1 ? 'skill hides' : 'skills hide' }} a library skill of the same name</span>
-            <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show</button></p>
-        }
-      }
-
-      <div class="actions">
-        <button type="button" [class.primary]="c.library.inSync === false || !c.library.built" [class.quiet]="c.library.inSync !== false && c.library.built"
-                (click)="s.rebuild()" [disabled]="s.applying()">{{ c.library.built ? 'Rebuild the library' : 'Build the library' }}</button>
-        <a routerLink="/library" class="link">Browse all skills</a>
-      </div>
-      <span class="jack out" data-jack="lib-out"></span>
-    </article>
-
-    @if (s.clashCounts(); as n) {
-      @if (n.total) {
-        <article class="module clashes" aria-labelledby="h-clashes">
-          <h3 id="h-clashes">Same name, more than one source</h3>
-          <ul class="clash-summary">
-            @if (n.changed) { <li class="caution"><b>{{ n.changed }}</b> changed since you chose</li> }
-            @if (n.needs) { <li><b>{{ n.needs }}</b> {{ n.needs === 1 ? 'needs' : 'need' }} a look <span class="fine">only the default order decided</span></li> }
-            @if (n.decided) { <li class="muted"><b>{{ n.decided }}</b> decided <span class="fine">by your source order, or by you</span></li> }
-            @if (n.identical) { <li class="muted"><b>{{ n.identical }}</b> identical {{ n.identical === 1 ? 'copy' : 'copies' }} <span class="fine">nothing to decide</span></li> }
-          </ul>
-          @for (col of attentionRows(); track col.name) {
-            <div class="clash-row">
-              <div>
-                <strong>{{ col.name }}</strong>
-                <span class="fine">{{ clashLine(col) }}</span>
-                @if (plannedChoice(col.name)) { <span class="planned-note">Changes when you apply</span> }
-              </div>
-              <a class="button quiet tiny" [routerLink]="['/compare', col.name]" [attr.aria-label]="'Compare the copies of ' + col.name">Compare</a>
-            </div>
-          }
-          @if (s.attention().length > 5 || n.decided) {
-            <div class="actions"><button type="button" class="quiet tiny" (click)="showSkills(s.attention().length > 5 ? 'attention' : 'collisions')">{{ s.attention().length > 5 ? 'Show all ' + s.attention().length : 'See every clash' }}</button></div>
-          }
-        </article>
-      }
-    }
+    <af-library-card [sockets]="true" />
   </div>
 
   <!-- ─────────────── Projects ─────────────── -->
@@ -178,7 +119,7 @@
       <p>Where your agents read skills</p>
     </header>
 
-    @for (report of c.projects; track report.project.id) {
+    @for (report of projects(); track report.project.id) {
       <article class="module project" [attr.aria-labelledby]="'p-' + report.project.id">
         <h3 [id]="'p-' + report.project.id">{{ report.project.name }}</h3>
         <p class="path">{{ report.project.path }}</p>
@@ -252,31 +193,9 @@
       </article>
     }
 
-    @for (item of pendingProjects(); track item.uid) {
-      <article class="module ghost"><h3>{{ item.change.args?.['path'] }}</h3><p class="planned-note">Will be added when you apply your changes</p></article>
-    }
-
-    @if (!c.projects.length && !pendingProjects().length && !projectOpen()) {
-      <p class="hint">Add the folder of a repository you work in, then wire its agents to the library.</p>
-    }
-
-    @if (projectOpen()) {
-      <form class="module form" (submit)="submitProject($event)" aria-labelledby="project-title">
-        <h3 id="project-title">Add a project</h3>
-        <label for="project-path">Project folder</label>
-        <input id="project-path" autocomplete="off" spellcheck="false" placeholder="D:\Repos\my-app"
-               [value]="projectPath()" (input)="projectPath.set($any($event.target).value)" required>
-        <p class="fine">Nothing in the folder changes until you wire it.</p>
-        <div class="actions">
-          <button type="submit" class="primary" [disabled]="!projectPath().trim()">Add</button>
-          <button type="button" class="quiet" (click)="projectOpen.set(false)">Cancel</button>
-        </div>
-      </form>
-    } @else {
-      <button type="button" class="add" (click)="projectOpen.set(true)" [disabled]="s.applying()">Add a project</button>
-    }
   </div>
 </section>
+}
 } @else if (!s.busy()) {
   <p class="empty-state">The dashboard could not read your workspace yet. Use Refresh to try again.</p>
 }

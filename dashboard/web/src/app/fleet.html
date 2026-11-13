@@ -1,0 +1,198 @@
+<header class="page-head">
+  <h1>Fleet</h1>
+  <p>Every source and project in one place. Search, filter and see what needs attention.</p>
+</header>
+
+@if (s.catalog(); as c) {
+  <section class="library-row" aria-labelledby="fleet-library">
+    <h2 id="fleet-library" class="sr">Library</h2>
+    <af-library-card />
+  </section>
+
+  <section class="strip" aria-label="What needs attention">
+    @if (layout() !== 'projects') {
+      <div class="strip-group" role="group" aria-label="Sources">
+        <button type="button" class="chip" [attr.aria-pressed]="filter() === 'all'" (click)="setFilter('all')">
+          <b>{{ counts().all }}</b> {{ counts().all === 1 ? 'source' : 'sources' }}
+        </button>
+        <button type="button" class="chip caution" [attr.aria-pressed]="filter() === 'attention'" (click)="setFilter('attention')" [disabled]="!counts().attention && filter() !== 'attention'">
+          <b>{{ counts().attention }}</b> need attention
+        </button>
+        <button type="button" class="chip caution" [attr.aria-pressed]="filter() === 'not-fetched'" (click)="setFilter('not-fetched')" [disabled]="!counts().notFetched && filter() !== 'not-fetched'">
+          <b>{{ counts().notFetched }}</b> not downloaded
+        </button>
+      </div>
+    }
+    @if (layout() !== 'sources') {
+      <div class="strip-group" role="group" aria-label="Projects">
+        <button type="button" class="chip" [attr.aria-pressed]="projectFilter() === 'all'" (click)="setProjectFilter('all')">
+          <b>{{ projectCount().all }}</b> {{ projectCount().all === 1 ? 'project' : 'projects' }}
+        </button>
+        <button type="button" class="chip caution" [attr.aria-pressed]="projectFilter() === 'attention'" (click)="setProjectFilter('attention')" [disabled]="!projectCount().attention && projectFilter() !== 'attention'">
+          <b>{{ projectCount().attention }}</b> {{ projectCount().attention === 1 ? 'project needs' : 'projects need' }} attention
+        </button>
+        <button type="button" class="chip caution" [attr.aria-pressed]="projectFilter() === 'unverified'" (click)="setProjectFilter('unverified')" [disabled]="!projectCount().unverified && projectFilter() !== 'unverified'">
+          <b>{{ projectCount().unverified }}</b> not verified
+        </button>
+      </div>
+    }
+  </section>
+
+  <div class="filters">
+    <div class="field grow">
+      <label for="fleet-search">Search</label>
+      <input id="fleet-search" type="search" placeholder="Name, folder or kind" [value]="query()" (input)="query.set($any($event.target).value)">
+    </div>
+    @if (narrowed()) { <button type="button" class="quiet" (click)="clear()">Clear</button> }
+    <div class="segmented" role="group" aria-label="Layout">
+      <button type="button" [attr.aria-pressed]="layout() === 'both'" (click)="setLayout('both')">Both</button>
+      <button type="button" [attr.aria-pressed]="layout() === 'sources'" (click)="setLayout('sources')">Sources</button>
+      <button type="button" [attr.aria-pressed]="layout() === 'projects'" (click)="setLayout('projects')">Projects</button>
+    </div>
+  </div>
+
+  @if (pickedCount()) {
+    <section class="selection-bar" aria-label="Selection">
+      <p role="status"><b>{{ pickedText() }}</b>@if (hiddenPicked()) { <span class="fine"> ({{ hiddenPicked() }} not showing)</span> }</p>
+      <button type="button" class="primary" (click)="fetchSelected()" [disabled]="!toFetch().length || s.applying()">Fetch selected ({{ toFetch().length }})</button>
+      <button type="button" class="primary" (click)="verifySelected()" [disabled]="!toVerify().length || s.applying()">Verify selected ({{ toVerify().length }} {{ toVerify().length === 1 ? 'agent' : 'agents' }})</button>
+      <button type="button" class="quiet" (click)="clearPicked()">Clear selection</button>
+      <p class="fine bar-note">Both only queue changes for you to review. Verify sends one short question per agent, on your account.</p>
+    </section>
+  }
+
+  <div class="fleet-shell" [class.drawer-open]="drawerOpen()">
+  <div class="fleet" [attr.data-layout]="layout()">
+    @if (layout() !== 'projects') {
+      <section class="list" aria-labelledby="fleet-sources">
+        <div class="pane-head">
+          <h2 id="fleet-sources">Sources</h2>
+          <button type="button" class="quiet tiny" data-open="attach" (click)="openForm('attach')" [disabled]="s.applying()">Attach a repository</button>
+        </div>
+        <p class="count" role="status">
+          {{ rows().length }} {{ rows().length === 1 ? 'source' : 'sources' }}@if (filtering()) { of {{ counts().all }} }
+        </p>
+        @if (s.pendingOrder()) { <p class="planned-note">This order takes effect when you apply your changes.</p> }
+        @if (showOrder() && filtering()) { <p class="fine">Clear the search and filter to change the order.</p> }
+        @if (showOrder() && !filtering()) { <p class="fine">When two sources have the same skill, the one higher up wins.</p> }
+
+        <table>
+          <thead>
+            <tr>
+              <th scope="col" class="pick"><input type="checkbox" aria-label="Select every Git source showing" [checked]="sourcePick() === 'all'" [indeterminate]="sourcePick() === 'some'" [disabled]="sourcePick() === 'none' && !fetchableRows().length" (change)="pickAllSources($any($event.target).checked)"></th>
+              @if (showOrder()) { <th scope="col">Order</th> }
+              <th scope="col">Source</th><th scope="col">Skills and status</th><th scope="col">Revision</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (src of rows(); track src.id) {
+              <tr [class.vault]="src.kind === 'primary'" [class.selected]="isSelected('source', src.id)">
+                <td class="pick">@if (src.kind === 'git') { <input type="checkbox" [attr.aria-label]="'Select ' + label(src)" [checked]="pickedSources().has(src.id)" (change)="pickSource(src.id, $any($event.target).checked)"> }</td>
+                @if (showOrder()) {
+                  <td class="order">
+                    <span class="rank" [attr.aria-label]="'Position ' + (rank(src) + 1)">{{ rank(src) + 1 }}</span>
+                    <button type="button" class="quiet tiny" (click)="s.moveSource(src, -1)" [disabled]="!canReorder() || rank(src) === 0" [attr.aria-label]="'Move ' + label(src) + ' up'">Up</button>
+                    <button type="button" class="quiet tiny" (click)="s.moveSource(src, 1)" [disabled]="!canReorder() || rank(src) === last()" [attr.aria-label]="'Move ' + label(src) + ' down'">Down</button>
+                  </td>
+                }
+                <td>
+                  <button type="button" class="row-button" [attr.data-select]="'source:' + src.id" [attr.aria-current]="isSelected('source', src.id) ? 'true' : null" (click)="select('source', src.id)">{{ label(src) }}</button>
+                  @if (src.kind !== 'primary') { <span class="tag">{{ src.kind === 'git' ? 'Git' : 'Folder' }}</span> }
+                  <span class="path">{{ src.kind === 'primary' ? src.root : src.location }}</span>
+                </td>
+                <td><span class="pill" [class.caution]="src.state === 'not-fetched'" [class.fault]="needsAttention(src) && src.state !== 'not-fetched'">{{ status(src) }}</span></td>
+                <td class="path">{{ short(src.revision) }}</td>
+              </tr>
+            }
+            @for (item of pendingAttach(); track item.uid) {
+              <tr class="ghost-row">
+                <td [attr.colspan]="showOrder() ? 5 : 4">
+                  <strong>{{ item.preview?.args?.['name'] || 'New source' }}</strong>
+                  <span class="path">{{ item.change.args?.['location'] }}</span>
+                  <span class="planned-note">Will be attached when you apply your changes</span>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        @if (!rows().length) { <p class="empty">No source matches. Clear the search or the filter.</p> }
+      </section>
+    }
+
+    @if (layout() !== 'sources') {
+      <section class="list" aria-labelledby="fleet-projects">
+        <div class="pane-head">
+          <h2 id="fleet-projects">Projects</h2>
+          <button type="button" class="quiet tiny" data-open="add-project" (click)="openForm('add-project')" [disabled]="s.applying()">Add a project</button>
+        </div>
+        @for (item of pendingProjects(); track item.uid) { <p class="planned-note">Will be added when you apply your changes: {{ item.change.args?.['path'] }}</p> }
+        <p class="count" role="status">
+          {{ projectRows().length }} {{ projectRows().length === 1 ? 'project' : 'projects' }}@if (projectsNarrowed()) { of {{ projectCount().all }} }
+          in {{ groups().length }} {{ groups().length === 1 ? 'folder' : 'folders' }}
+        </p>
+        @if (groups().length > 1 && !projectsNarrowed()) {
+          <div class="actions">
+            <button type="button" class="quiet tiny" (click)="setAll(true)">Expand all</button>
+            <button type="button" class="quiet tiny" (click)="setAll(false)">Collapse all</button>
+          </div>
+        }
+        @if (projectsNarrowed() && groups().length) { <p class="fine">Every folder with a match is open. Clear the search or filter to collapse folders.</p> }
+
+        <table class="projects">
+          <thead><tr>
+            <th scope="col" class="pick"><input type="checkbox" aria-label="Select every project showing" [checked]="projectPick() === 'all'" [indeterminate]="projectPick() === 'some'" [disabled]="!projectRows().length" (change)="pickAllProjects($any($event.target).checked)"></th>
+            <th scope="col">Project</th><th scope="col">Status</th><th scope="col">Agents</th><th scope="col">Verified</th>
+          </tr></thead>
+          @for (g of groups(); track g.key) {
+            <tbody>
+              <tr class="group-row">
+                <td colspan="5">
+                  <div class="group-line">
+                    <input type="checkbox" class="pick" [attr.aria-label]="'Select every project in ' + g.label" [checked]="groupPick(g) === 'all'" [indeterminate]="groupPick(g) === 'some'" (change)="pickGroup(g, $any($event.target).checked)">
+                    <button type="button" class="group-toggle" [attr.aria-expanded]="isOpen(g)" (click)="toggle(g)" [disabled]="projectsNarrowed()" [title]="g.folder">
+                      <span class="caret" aria-hidden="true">{{ isOpen(g) ? '▾' : '▸' }}</span>
+                      <strong>{{ g.label }}</strong>
+                      <span class="fine">{{ g.rows.length }} {{ g.rows.length === 1 ? 'project' : 'projects' }}</span>
+                      @if (groupAttention(g); as n) { <span class="pill" [class.fault]="groupHealth(g) === 'fault'" [class.caution]="groupHealth(g) !== 'fault'">{{ n }} {{ n === 1 ? 'needs' : 'need' }} attention</span> }
+                    </button>
+                    <a class="button quiet tiny" routerLink="/map" [queryParams]="{ group: g.key }" [attr.aria-label]="'Show wiring for ' + g.label">Show wiring</a>
+                  </div>
+                </td>
+              </tr>
+              @if (isOpen(g)) {
+                @for (row of g.rows; track row.report.project.id) {
+                  <tr [class.selected]="isSelected('project', row.report.project.id)">
+                    <td class="pick"><input type="checkbox" [attr.aria-label]="'Select ' + row.report.project.name" [checked]="pickedProjects().has(row.report.project.id)" (change)="pickProject(row.report.project.id, $any($event.target).checked)"></td>
+                    <td><button type="button" class="row-button" [attr.data-select]="'project:' + row.report.project.id" [attr.aria-current]="isSelected('project', row.report.project.id) ? 'true' : null" (click)="select('project', row.report.project.id)">{{ row.report.project.name }}</button></td>
+                    <td><span class="pill" [class.fault]="row.summary.health === 'fault'" [class.caution]="row.summary.health === 'caution'" [class.muted]="row.summary.health === 'none'">{{ row.summary.text }}</span></td>
+                    <td class="agent-chips">
+                      @for (a of row.summary.agents; track a.id) {
+                        <span [class]="'agent-chip ' + a.tone" [attr.aria-label]="a.name + ': ' + a.text" [title]="a.text">{{ a.name }}</span>
+                      } @empty { <span class="muted">None</span> }
+                    </td>
+                    <td class="fine">{{ verifiedText(row.summary) }}</td>
+                  </tr>
+                }
+              }
+            </tbody>
+          }
+        </table>
+        @if (!groups().length) { <p class="empty">{{ projectCount().all ? 'No project matches. Clear the search or the filter.' : 'No projects yet. Use Add a project.' }}</p> }
+      </section>
+    }
+  </div>
+
+  @if (drawerOpen()) {
+    <aside class="inspector drawer" aria-label="Details" (keydown.escape)="close()">
+      <button type="button" class="quiet tiny close" (click)="close()">Close details</button>
+      @if (selectedSource(); as src) { <af-source-detail [source]="src" /> }
+      @else if (selectedProject(); as report) { <af-project-detail [report]="report" /> }
+      @else if (selection()?.kind === 'attach') { <af-attach-form (done)="close()" /> }
+      @else if (selection()?.kind === 'add-project') { <af-project-form (done)="close()" /> }
+    </aside>
+  }
+  </div>
+
+} @else if (!s.busy()) {
+  <p class="empty-state">The dashboard could not read your workspace yet. Use Refresh to try again.</p>
+}

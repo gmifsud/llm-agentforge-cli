@@ -265,6 +265,12 @@ export class Store {
   }
   detach(source: Source) { this.queue({ kind: 'source.detach', args: { name: source.key } }, { kind: 'library.rebuild' }); }
   fetch(source?: Source) { this.queue({ kind: 'source.fetch', args: source ? { name: source.key } : {} }, { kind: 'library.rebuild' }); }
+  /** Fetch several Git sources as one reviewed list: one fetch each and a single rebuild. Folders and the vault have nothing to fetch. */
+  fetchMany(sources: Source[]) {
+    const git = sources.filter(s => s.kind === 'git');
+    if (!git.length) return;
+    this.queue(...git.map(s => ({ kind: 'source.fetch' as const, args: { name: s.key } })), { kind: 'library.rebuild' });
+  }
   rebuild() { this.queue({ kind: 'library.rebuild' }); }
   prefer(skill: string, source: Source | null) {
     this.queue({ kind: 'library.prefer', args: source && source.kind !== 'primary' ? { skill, source: source.key } : source ? { skill, source: 'vault' } : { skill } }, { kind: 'library.rebuild' });
@@ -280,6 +286,11 @@ export class Store {
   /** Swap a link for a copy (a tool that ignores links), or refresh a copy that has fallen behind the library. */
   /** Ask the tool itself. A check queued behind a wire or rebuild runs after it, against the result. */
   verify(projectId: string, target: TargetReport) { this.queue({ kind: 'project.verify', args: { projectId, target: target.id } }); }
+  /** Ask several tools at once, as one reviewed list with one check each. The same check is never queued twice. */
+  verifyMany(items: { projectId: string; target: string }[]) {
+    if (!items.length) return;
+    this.queue(...items.map(i => ({ kind: 'project.verify' as const, args: { projectId: i.projectId, target: i.target } })));
+  }
   copyFor(projectId: string, target: TargetReport) { this.wire(projectId, [target.id], { writeDocs: false, link: 'copy' }); }
 
   /** Changes waiting in the tray that touch a given thing, for ghost cables and badges. */

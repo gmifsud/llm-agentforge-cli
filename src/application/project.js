@@ -56,10 +56,12 @@ function planProject({ projectRoot, targetSelector, vars, templatesDir, vaultRoo
   return plans;
 }
 
-/** Structured diagnostics. Presence is reported separately from health. */
-function inspectProject({ projectRoot, vaultRoot, checkRead = () => {} }) {
-  const root = path.resolve(projectRoot);
-  checkRead(root);
+/**
+ * What the library holds. It depends only on the library, never on a project, so one read of many
+ * projects can pass a `scan` map and pay for it once. A scan is valid for that read only.
+ */
+function inspectLibrary(vaultRoot, checkRead, scan) {
+  if (scan && scan.has(vaultRoot)) return { ...scan.get(vaultRoot) };
   checkRead(vaultRoot);
   const vaultState = inspectDestination(vaultRoot);
   const vault = {
@@ -85,6 +87,15 @@ function inspectProject({ projectRoot, vaultRoot, checkRead = () => {} }) {
       }
     }
   }
+  if (scan) scan.set(vaultRoot, vault);
+  return { ...vault };
+}
+
+/** Structured diagnostics. Presence is reported separately from health. */
+function inspectProject({ projectRoot, vaultRoot, checkRead = () => {}, scan }) {
+  const root = path.resolve(projectRoot);
+  checkRead(root);
+  const vault = inspectLibrary(vaultRoot, checkRead, scan);
 
   const targets = Object.values(TARGETS).map((t) => {
     const docPath = path.join(root, t.doc);

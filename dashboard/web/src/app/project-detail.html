@@ -1,0 +1,70 @@
+<h2 id="drawer-title" tabindex="-1">{{ report().project.name }}</h2>
+<p class="path">{{ report().project.path }}</p>
+
+@if (report().state !== 'available') {
+  @for (w of report().warnings; track $index) { <p class="state fault">{{ w }}</p> }
+} @else {
+  @if (!shown().length) { <p class="state muted">No agents read skills here yet.</p> }
+  <ul class="agents">
+    @for (t of shown(); track t.id) {
+      <li [class]="'agent ' + state(t).tone" [class.planned]="plannedFor(t.id)" [class.copied]="t.feeds === 'copy'" [class.verified]="isVerified(t)">
+        <span class="agent-name">{{ agents[t.id] }}</span>
+        <span class="agent-state">
+          @if (plannedFor(t.id)) { Will read the library } @else { {{ state(t).text }} }
+        </span>
+        @if (working(t) && !plannedFor(t.id)) {
+          @if (plannedVerify(t.id)) { <span class="agent-doc planned-note">Will be checked when you apply</span> }
+          @else if (verified(t); as v) { <span class="agent-doc" [class.verified-line]="v.good" [class.caution-line]="!v.good">{{ v.text }}</span> }
+          @else { <span class="agent-doc">Linked. Not checked with the tool yet</span> }
+          <span class="agent-doc">{{ invoke[t.id] }}</span>
+        }
+        @if (t.feeds !== 'none' || t.docExists) { <span class="agent-doc">{{ t.doc }} {{ t.docExists ? 'present' : 'missing' }}</span> }
+        @if (!plannedFor(t.id)) {
+          @if (needsRepoint(t)) {
+            <button type="button" class="quiet tiny" (click)="s.repoint(report().project.id, t)" [disabled]="s.applying()"
+                    [attr.aria-label]="'Repoint ' + agents[t.id] + ' in ' + report().project.name + ' to the library'">Repoint</button>
+          } @else if (needsCopy(t)) {
+            <button type="button" class="quiet tiny" (click)="s.copyFor(report().project.id, t)" [disabled]="s.applying()"
+                    [attr.aria-label]="'Give ' + agents[t.id] + ' in ' + report().project.name + ' a copy of the library'">Copy instead</button>
+          } @else if (staleCopy(t)) {
+            <button type="button" class="quiet tiny" (click)="s.copyFor(report().project.id, t)" [disabled]="s.applying()"
+                    [attr.aria-label]="'Refresh the copy for ' + agents[t.id] + ' in ' + report().project.name">Refresh copy</button>
+          } @else if (working(t) && !isVerified(t) && !plannedVerify(t.id)) {
+            <button type="button" class="quiet tiny" (click)="s.verify(report().project.id, t)" [disabled]="s.applying()"
+                    [attr.aria-label]="'Verify ' + agents[t.id] + ' in ' + report().project.name">Verify</button>
+          }
+        }
+      </li>
+    }
+  </ul>
+  @if (shown().length && unwired()) { <p class="fine">Not wired: {{ unwired() }}</p> }
+}
+
+@if (wiring()) {
+  <form class="wire" (submit)="submitWire($event)" [attr.aria-label]="'Wire agents in ' + report().project.name">
+    <fieldset>
+      <legend>Which agents should read the library?</legend>
+      @for (id of agentIds; track id) {
+        <label><input type="checkbox" [checked]="wireTargets().has(id)" (change)="toggleTarget(id, $any($event.target).checked)"> {{ agents[id] }}</label>
+      }
+    </fieldset>
+    @if (wireTargets().has('antigravity')) { <p class="fine">Antigravity does not follow links, so .agents/skills becomes a copy. Refresh it after the library changes.</p> }
+    <label class="inline"><input type="checkbox" [checked]="wireDocs()" (change)="wireDocs.set($any($event.target).checked)"> Write the instruction file if it is missing</label>
+    <label class="inline"><input type="checkbox" [checked]="wireCopy()" (change)="wireCopy.set($any($event.target).checked)"> Copy the skills instead of linking</label>
+    @if (wireCopy()) { <p class="fine">A copy does not follow later changes to the library.</p> }
+    <div class="actions">
+      <button type="submit" class="primary" [disabled]="!wireTargets().size">Wire</button>
+      <button type="button" class="quiet" (click)="wiring.set(false)">Cancel</button>
+    </div>
+  </form>
+} @else if (report().state === 'available') {
+  <div class="actions">
+    <button type="button" class="quiet" (click)="openWire()" [disabled]="s.applying()">Wire agents</button>
+    <a class="button quiet" routerLink="/map" [queryParams]="{ project: report().project.id }">Show wiring</a>
+    @if (report().project.origin === 'saved') {
+      <button type="button" class="quiet" (click)="s.forgetProject(report().project.id)" [disabled]="s.applying()">Remove from list</button>
+    }
+  </div>
+} @else if (report().project.origin === 'saved') {
+  <div class="actions"><button type="button" class="quiet" (click)="s.forgetProject(report().project.id)">Remove from list</button></div>
+}

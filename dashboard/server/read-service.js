@@ -315,8 +315,10 @@ class ReadService {
       library = { path: this.paths.mergedSkills, built: d.built, builtAt: d.builtAt, invalid: d.invalid, size: d.size, add: [], remove: [], change: [], inSync: null };
     }
     skills.sort((a, b) => compare(a.name, b.name) || compare(a.sourceId, b.sourceId) || compare(a.relativePath, b.relativePath));
+    // The library is the same for every project, so it is scanned once per read. The map lives only for this read.
+    const libraryScan = new Map();
     const projects = this.projects.map(p => {
-      try { return this.project(p.id, context); }
+      try { return this.project(p.id, context, libraryScan); }
       catch (e) { return { project: p, readAt: new Date().toISOString(), deployment: context.deployment, targets: [], state: 'unreadable', warnings: [e instanceof ReadError ? e.message : 'Project could not be inspected.'] }; }
     });
     const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
@@ -390,7 +392,7 @@ class ReadService {
     }
   }
 
-  project(id, context) {
+  project(id, context, libraryScan) {
     const { deployment, primaryRoot } = context || this.context();
     const project = this.projects.find(p => p.id === id);
     if (!project) throw new ReadError(ERROR.NOT_FOUND, 'Project not configured for this session.', 404);
@@ -412,7 +414,7 @@ class ReadService {
     localPath(deployment.root);
     const libraryState = availability(deployment.root);
     if (libraryState !== 'available') result.warnings.push('Effective skill library is missing or unreadable.');
-    const report = inspectProject({ projectRoot: project.path, vaultRoot: deployment.root, checkRead: localPath });
+    const report = inspectProject({ projectRoot: project.path, vaultRoot: deployment.root, checkRead: localPath, scan: libraryScan });
     result.targets = report.targets.map(t => {
       let docExists = false;
       try { docExists = fs.statSync(path.join(project.path, t.doc)).isFile(); } catch { /* absence is reported */ }
