@@ -11,8 +11,10 @@ const { usage } = require('../domain/errors');
 const VALUE_OPTIONS = {
   path: 'path', target: 'target', name: 'name', stack: 'stack', owner: 'owner',
   buildcmd: 'build', build: 'build', testcmd: 'test', test: 'test', runcmd: 'run', run: 'run',
-  vaultroot: 'vault', vault: 'vault', linktype: 'link', link: 'link', branch: 'branch', tool: 'tool',
+  vaultroot: 'vault', vault: 'vault', linktype: 'link', link: 'link', branch: 'branch', tool: 'tool', set: 'set',
 };
+/** Options that may be given more than once; every value is kept, in order. */
+const MULTI_OPTIONS = { include: 'include', exclude: 'exclude' };
 const FLAG_OPTIONS = {
   dryrun: 'dryRun', 'dry-run': 'dryRun', force: 'force', preserve: 'preserve',
   nopreserve: 'noPreserve', 'no-preserve': 'noPreserve', json: 'json',
@@ -41,6 +43,12 @@ function parseArgs(argv) {
         const v = inlineValue.toLowerCase();
         out.opts[FLAG_OPTIONS[key]] = !(v === 'false' || v === '0' || v === '$false');
       } else out.opts[FLAG_OPTIONS[key]] = true;
+      continue;
+    }
+    if (MULTI_OPTIONS[key]) {
+      const value = inlineValue !== undefined ? inlineValue : rest.shift();
+      if (value === undefined) throw usage(`option ${tok} needs a value`);
+      out.opts[MULTI_OPTIONS[key]] = [...(out.opts[MULTI_OPTIONS[key]] || []), value];
       continue;
     }
     if (VALUE_OPTIONS[key]) {

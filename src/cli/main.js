@@ -4,7 +4,7 @@
 const path = require('node:path');
 const os = require('node:os');
 const { parseArgs } = require('./args');
-const { AgentforgeError } = require('../domain/errors');
+const { AgentforgeError, usage, refused } = require('../domain/errors');
 const { createPaths, loadConfig, resolveDeployRoot } = require('../infra/paths');
 const { createGit } = require('../infra/git');
 const { buildVars, planProject, inspectProject } = require('../application/project');
@@ -12,7 +12,9 @@ const { inspectLibrary } = require('../application/health');
 const { verifyTarget } = require('../application/verify');
 const { applyPlan, describeAction } = require('../deployment/apply');
 const { addSource, removeSource, listSources, fetchSources } = require('../application/sources');
-const { syncView } = require('../application/sync');
+const { syncView, computeLibrary } = require('../application/sync');
+const sets = require('../application/sets');
+const { parseRule, resolveSet } = require('../domain/sets');
 const { planChecks, runChecks } = require('../application/check');
 const { loadSavedProjects } = require('../infra/projects');
 
@@ -23,7 +25,8 @@ Usage:
   agentforge init   [--path P] [--target claude|codex|generic|gemini|cursor|antigravity|all] [--name N] [--stack S]
                     [--owner O] [--build C] [--test C] [--run C] [--vault V]
                     [--link junction|symlink|copy|none|auto] [--dry-run] [--force] [--no-preserve]
-  agentforge link   [--path P] [--target T] [--vault V] [--link L] [--dry-run] [--force] [--no-preserve]
+  agentforge link   [--path P] [--target T] [--vault V | --set NAME] [--link L] [--dry-run] [--force] [--no-preserve]
+                                             --set points the agent at a set instead of the whole library
   agentforge doctor [--path P] [--vault V] [--json]
   agentforge verify [--path P] [--target T] [--tool claude|codex|gemini|cursor|antigravity] [--json]
                                              ask the agent tool itself whether it sees the wired skills
@@ -32,6 +35,14 @@ Usage:
   agentforge check  [--path P] [--dry-run] [--json]
                                              ask every working agent in every remembered project whether it sees
                                              the skills; one that cannot be asked does not stop the rest
+  agentforge set create <name> --include type:value [--include ...] [--exclude type:value ...] [--force]
+                                             a set is a shortlist of the library, so an agent sees all of its skill
+                                             descriptions. type is skill, name (orcaflex-*), source or category.
+                                             Excludes apply after includes. The set is built at once.
+  agentforge set list [--json]               every set and how many skills it holds
+  agentforge set show <name> [--json]        its rules, its skills, and how much of its listing an agent will see
+  agentforge set build [name]                rebuild sets from the library (update does this too)
+  agentforge set remove <name> [--force]     refused while an agent reads it, unless forced
   agentforge repo add <url-or-path> [--name ID] [--branch B]
   agentforge repo remove <ID>
   agentforge repo list [--json]
@@ -103,6 +114,8 @@ function run(argv, {
         return cmdSync('agentforge update', { paths, env, opts, log, elog, git: gitClient });
       case 'check':
         return cmdCheck({ paths, cwd, opts, log, elog, stdout, verifyRun });
+      case 'set':
+        return cmdSet(positional, { paths, env, opts, log, elog, stdout });
       case 'repo':
         return cmdRepo(positional, { paths, env, opts, log, elog, stdout, git: gitClient });
       default:
@@ -126,7 +139,9 @@ function run(argv, {
 function cmdProject(command, { paths, env, platform, cwd, opts, log, elog }) {
   const projectRoot = path.resolve(cwd, opts.path || '.');
   const config = loadConfig(paths);
-  const { root: vaultRoot, origin, warnings } = resolveDeployRoot({ cliVault: opts.vault, env, paths, config });
+  const { root: vaultRoot, origin, warnings } = opts.set
+    ? { root: sets.viewForLink(paths, opts.set), origin: `set ${opts.set}`, warnings: [] }
+    : resolveDeployRoot({ cliVault: opts.vault, env, paths, config });
   const preserve = opts.noPreserve ? false : true;
   const dryRun = Boolean(opts.dryRun);
   const vars = buildVars({ projectRoot, name: opts.name, stack: opts.stack, owner: opts.owner, build: opts.build, test: opts.test, run: opts.run, env });
@@ -173,6 +188,7 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
   const report = inspectProject({ projectRoot, vaultRoot });
   report.vaultOrigin = origin;
   report.warnings = warnings;
+  for (const t of report.targets) t.reads = t.link.kind === 'link' ? sets.readsOf(paths, t.link.resolvedTarget) : { kind: 'other' };
   report.library = report.vault.ok ? inspectLibrary({ root: vaultRoot, homedir: paths.homedir, config }) : null;
 
   if (opts.json) { stdout.write(JSON.stringify(report, null, 2) + '\n'); return report.ok ? 0 : 1; }
@@ -195,6 +211,7 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
     const linkMark = t.link.kind === 'missing' ? '·' : t.linkHealth === 'broken' || t.linkHealth.startsWith('file') ? '✗' : '✓';
     log.info(`${t.id.padEnd(12)}  doc:${docMark}  link:${linkMark}  ${t.link.kind === 'missing' ? '' : t.linkHealth}`);
     if (t.link.kind === 'link') log.grey(`               ↳ ${t.link.broken ? 'BROKEN → ' : '→ '}${t.link.resolvedTarget || t.link.target}`);
+    if (t.reads.kind === 'set') log.grey(`               ↳ reads set ${t.reads.name}`);
   }
   return report.ok ? 0 : 1;
 }
@@ -296,7 +313,99 @@ function cmdSync(title, { paths, env, opts, log, elog, git }) {
   const summary = Object.entries(bySource).map(([s, n]) => `${n} from ${s}`).join(', ');
   if (dryRun) log.dry(`would link ${res.view.entries.length} skills (${summary})`);
   else log.ok(`merged view built: ${res.linked} skills linked (${summary})`);
+  printSinceLastBuild(res.lock, log);
+  printSets(res.sets, dryRun, log);
   return exit;
+}
+
+/** The sets built with the library, or on a dry run the ones that would be. A rule that selects nothing is warned about. */
+function printSets(rows, dryRun, log) {
+  if (!rows.length) return;
+  const skills = (n) => `${n} ${n === 1 ? 'skill' : 'skills'}`;
+  for (const s of rows) for (const r of s.unmatched) log.warn(`set "${s.name}": ${r.type}:${r.value} selects no skill`);
+  if (dryRun) log.dry(`would build ${rows.length} ${rows.length === 1 ? 'set' : 'sets'}: ${rows.map((s) => `${s.name} (${skills(s.count)})`).join(', ')}`);
+  else log.ok(`sets built: ${rows.map((s) => `${s.name} (${skills(s.linked)})`).join(', ')}`);
+}
+
+/** What changed in the sources since the last build, from the lock record. A dry run shows it without recording it. */
+function printSinceLastBuild(lock, log) {
+  const c = lock.changes;
+  if (c.first) { log.grey('no earlier build on record, so there is nothing to compare with'); return; }
+  const names = (list) => `${list.slice(0, 8).join(', ')}${list.length > 8 ? ` and ${list.length - 8} more` : ''}`;
+  const rows = [['added', c.added], ['removed', c.removed], ['content changed', c.changed], ['moved to another source', c.moved]].filter(([, list]) => list.length);
+  if (!rows.length) { log.grey('no skill changed since the last build'); return; }
+  log.info('since the last build:');
+  for (const [what, list] of rows) log.grey(`${what}: ${list.length}  (${names(list)})`);
+}
+
+// ─── set ─────────────────────────────────────────────────────────────────────
+
+const fitsText = (b) => (b.fits ? 'every description fits' : `about ${b.kept} of ${b.entries} descriptions fit`);
+
+/** A set is a shortlist of the library, by rule, built as its own folder of links. */
+function cmdSet(positional, { paths, env, opts, log, elog, stdout }) {
+  const [action, name] = positional;
+  const library = () => computeLibrary({ paths, env, cliVault: opts.vault });
+  const budgetOf = (config, entries) => sets.setBudget(entries, { budgetChars: config.listingBudgetChars, contextTokens: config.contextTokens });
+  const skills = (n) => `${n} ${n === 1 ? 'skill' : 'skills'}`;
+  switch (action) {
+    case 'list': {
+      const lib = sets.describeEntries(library().view.entries);
+      const doc = sets.loadSets(paths);
+      const rows = Object.keys(doc.sets).map((n) => ({ name: n, rules: doc.sets[n].rules.length, skills: resolveSet(doc.sets[n], lib).entries.length }));
+      if (opts.json) { stdout.write(JSON.stringify(rows, null, 2) + '\n'); return 0; }
+      log.step('agentforge set list');
+      if (!rows.length) { log.info('no sets yet'); log.grey('use "agentforge set create <name> --include category:..."'); return 0; }
+      for (const r of rows) log.info(`${r.name}  ${skills(r.skills)}  (${r.rules} ${r.rules === 1 ? 'rule' : 'rules'})`);
+      return 0;
+    }
+    case 'show': {
+      if (!name) throw usage('usage: agentforge set show <name>');
+      const { config, view } = library();
+      const doc = sets.loadSets(paths);
+      if (!doc.sets[name]) throw refused('NO_SUCH_SET', `no set called "${name}"`);
+      const resolved = resolveSet(doc.sets[name], sets.describeEntries(view.entries));
+      const budget = budgetOf(config, resolved.entries);
+      if (opts.json) { stdout.write(JSON.stringify({ name, skills: resolved.entries.map((e) => e.name), rules: resolved.rules, unmatched: resolved.unmatched, budget }, null, 2) + '\n'); return 0; }
+      log.step(`agentforge set show ${name}`);
+      for (const r of resolved.rules) log.info(`${r.exclude ? '−' : '+'} ${r.type}:${r.value}  (${r.exclude ? `removes ${r.removed}` : `${skills(r.matched)}, ${r.added} new`})`);
+      for (const r of resolved.unmatched) log.warn(`${r.type}:${r.value} selects no skill`);
+      log.raw('');
+      log.ok(`${skills(resolved.entries.length)}; ${fitsText(budget)}`);
+      log.grey(resolved.entries.map((e) => e.name).join(', '));
+      return 0;
+    }
+    case 'create': {
+      if (!name) throw usage('usage: agentforge set create <name> --include type:value [--include ...] [--exclude type:value ...]');
+      const rules = [...(opts.include || []).map((t) => parseRule(t)), ...(opts.exclude || []).map((t) => parseRule(t, { exclude: true }))];
+      const { config, view } = library();
+      const made = sets.createSet({ paths, name, rules, entries: view.entries, force: Boolean(opts.force) });
+      log.ok(`set "${name}": ${skills(made.linked)}, ${fitsText(budgetOf(config, made.resolved.entries))}`);
+      log.grey(`built at ${sets.setView(paths, name)}`);
+      log.grey(`point an agent at it with: agentforge link --set ${name} --target <agent>`);
+      return 0;
+    }
+    case 'build': {
+      const { view } = library();
+      const rows = sets.buildSets({ paths, entries: view.entries, only: name, dryRun: Boolean(opts.dryRun) });
+      if (name && !rows.length) throw refused('NO_SUCH_SET', `no set called "${name}"`);
+      log.step('agentforge set build');
+      if (!rows.length) { log.info('no sets to build'); return 0; }
+      printSets(rows, Boolean(opts.dryRun), log);
+      return 0;
+    }
+    case 'remove': {
+      if (!name) throw usage('usage: agentforge set remove <name> [--force]');
+      const r = sets.removeSet({ paths, name, force: Boolean(opts.force) });
+      log.ok(`removed set "${name}"${r.removedView ? ' and its folder of links' : ''}`);
+      if (r.readers.length) log.warn(`${r.readers.length} agent ${r.readers.length === 1 ? 'link now points' : 'links now point'} at a folder that is gone`);
+      log.grey('the skills themselves are untouched');
+      return 0;
+    }
+    default:
+      elog.err('usage: agentforge set <create|list|show|build|remove> ...');
+      return 2;
+  }
 }
 
 // ─── check ───────────────────────────────────────────────────────────────────
