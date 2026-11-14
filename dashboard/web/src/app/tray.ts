@@ -87,7 +87,7 @@ export class Tray {
   offer = computed(() => {
     const c = this.s.catalog();
     if (!c || !this.s.tray().some(i => i.change.kind === 'library.rebuild')) return [];
-    return pendingChecks(c.projects, i => this.s.pendingFor('project.verify', a => a['projectId'] === i.projectId && a['target'] === i.target).length > 0, t => t.feeds === 'library');
+    return pendingChecks(c.projects, i => this.s.pendingFor('project.verify', a => a['projectId'] === i.projectId && a['target'] === i.target).length > 0, t => t.feeds === 'library' || t.feeds === 'set');
   });
   heading = computed(() => {
     const results = this.s.results();

@@ -1,0 +1,108 @@
+<header class="page-head">
+  <h1>{{ isNew() ? 'New set' : 'Set ' + paramName() }}</h1>
+  <p>Add skills by rule or by hand. The list on the right is exactly what an agent will read.</p>
+</header>
+
+@if (s.catalog(); as c) {
+  <div class="two">
+    <div class="stack">
+      <form class="module form" (submit)="addRule($event)" aria-label="Add to this set">
+        <label for="set-name">Name</label>
+        <input id="set-name" autocomplete="off" spellcheck="false" [value]="name()" (input)="name.set($any($event.target).value)" [readOnly]="!isNew()" placeholder="offshore">
+        @if (isNew() && name() && nameProblem()) { <p class="fine problem">{{ nameProblem() }}</p> }
+
+        <h3 style="margin-top:.6rem">Add to this set</h3>
+        <div class="addrow">
+          <select aria-label="Kind of rule" (change)="setKind($any($event.target).value)">
+            @for (k of kinds; track k.type) { <option [value]="k.type" [selected]="k.type === kind()">{{ k.label }}</option> }
+          </select>
+          @if (kind() === 'category') {
+            <select aria-label="Category" (change)="value.set($any($event.target).value)">
+              <option value="" [selected]="!value()">Choose a category</option>
+              @for (x of categories(); track x.value) { <option [value]="x.value" [selected]="x.value === value()">{{ x.value }} ({{ x.count }})</option> }
+            </select>
+          } @else if (kind() === 'source') {
+            <select aria-label="Source" (change)="value.set($any($event.target).value)">
+              <option value="" [selected]="!value()">Choose a source</option>
+              @for (x of sourceChoices(); track x.value) { <option [value]="x.value" [selected]="x.value === value()">{{ x.value }} ({{ x.count }})</option> }
+            </select>
+          } @else {
+            <input aria-label="Value" autocomplete="off" spellcheck="false" [attr.list]="kind() === 'skill' ? 'skill-names' : null" [value]="value()"
+                   (input)="value.set($any($event.target).value)" [placeholder]="kind() === 'name' ? 'orcaflex-*' : 'a skill name'">
+            <datalist id="skill-names">@for (e of library(); track e.name) { <option [value]="e.name"></option> }</datalist>
+          }
+          <button type="submit" class="quiet" [disabled]="!value().trim()">Add</button>
+        </div>
+        <p class="fine">{{ hint() }}. Or tick skills in the list. A rule that selects nothing is not saved.</p>
+      </form>
+
+      <section class="module" aria-label="Rules">
+        <h3>Rules</h3>
+        @if (!rules().length) { <p class="fine">No rules yet.</p> }
+        <table class="rules">
+          <tbody>
+            @for (r of resolved().rules; track $index; let i = $index) {
+              <tr>
+                <td [class]="r.exclude ? 'minus' : 'plus'" aria-hidden="true">{{ r.exclude ? '−' : '+' }}</td>
+                <td><b>{{ r.type }}</b> {{ r.value }} @if (r.exclude) { <span class="tag">left out</span> }
+                  @if (!r.exclude && !r.matched) { <span class="pill caution">selects nothing</span> }</td>
+                <td class="num">{{ r.exclude ? '−' + r.removed : r.matched }}@if (!r.exclude && r.matched !== r.added) { <span class="fine"> ({{ r.added }} new)</span> }</td>
+                <td><button type="button" class="quiet tiny" (click)="removeRule(i)" [attr.aria-label]="(r.exclude ? 'Put back ' : 'Remove ') + r.type + ' ' + r.value">{{ r.exclude ? 'Put back' : 'Remove' }}</button></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        <p class="fine">Rules apply in order. A skill that two rules both select is counted once.</p>
+      </section>
+    </div>
+
+    <div class="stack">
+      <section class="module" aria-label="What agents will see">
+        <h3>What agents will see</h3>
+        <div class="budget plain">
+          <div class="meter"><span [style.width.%]="percent()" [class.over]="!fit().fits"></span></div>
+          @if (!resolved().entries.length) { <p class="fine">Nothing in this set yet.</p> }
+          @else if (fit().fits) {
+            <p class="fine"><b class="ok">Every description fits.</b> {{ resolved().entries.length }} {{ resolved().entries.length === 1 ? 'skill' : 'skills' }}, about {{ fit().usedChars }} of {{ fit().budgetChars }} characters.@if (room()) { You could add about {{ room() }} more skills of this length. }</p>
+          } @else {
+            <p class="fine"><b class="warn">About {{ fit().kept }} of {{ fit().kept + fit().dropped }} descriptions fit.</b> {{ resolved().entries.length }} skills, about {{ fit().usedChars }} of {{ fit().budgetChars }} characters. The rest can still be called by name, but agents will not pick them on their own.</p>
+          }
+        </div>
+      </section>
+
+      <section class="module" aria-label="Skills in this set">
+        <div class="pane-head"><h3>{{ resolved().entries.length }} {{ resolved().entries.length === 1 ? 'skill' : 'skills' }} in this set</h3>
+          <label class="fine inline">Show
+            <select aria-label="Show" (change)="setShow($any($event.target).value)">
+              <option value="all" [selected]="show() === 'all'">all</option>
+              <option value="in" [selected]="show() === 'in'">in this set</option>
+              <option value="out" [selected]="show() === 'out'">not in this set</option>
+              <option value="nocat" [selected]="show() === 'nocat'">no category</option>
+            </select></label></div>
+        <input type="search" aria-label="Search skills" placeholder="Search" [value]="query()" (input)="query.set($any($event.target).value)" style="margin:.3rem 0 .5rem">
+        <table class="skills">
+          <tbody>
+            @for (e of visible(); track e.name) {
+              <tr>
+                <td><input type="checkbox" [attr.aria-label]="'Include ' + e.name" [checked]="has(e)" (change)="toggleSkill(e.name, $any($event.target).checked)"></td>
+                <td [class.muted]="!has(e)">{{ e.name }}</td>
+                <td class="fine">{{ why(e) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        @if (hidden()) { <p class="fine">{{ hidden() }} more. Search or choose what to show to narrow the list.</p> }
+        @if (!visible().length) { <p class="empty">No skill matches.</p> }
+      </section>
+
+      <div class="actions">
+        <button type="button" class="primary" (click)="save()" [disabled]="!canSave()">Save set</button>
+        <a class="button quiet" routerLink="/sets">Cancel</a>
+        <span class="fine">Nothing changes until you apply.</span>
+      </div>
+      @if (!canSave() && rules().length) { <p class="fine problem">{{ saveProblem() }}</p> }
+    </div>
+  </div>
+} @else if (!s.busy()) {
+  <p class="empty-state">The dashboard could not read your workspace yet. Use Refresh to try again.</p>
+}

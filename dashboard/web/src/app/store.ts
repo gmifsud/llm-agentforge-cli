@@ -1,8 +1,8 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-import type { Catalog, Context, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
-export type { Catalog, Context, Skill, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, DiffHunk, LintFinding } from '../../../contracts';
+import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
+export type { Catalog, Context, Skill, SetRule, SetInfo, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, DiffHunk, LintFinding } from '../../../contracts';
 
 export const PAGE_SIZE = 50;
 const API = '/api/v1';
@@ -13,7 +13,7 @@ function message(error: any): string { return error?.error?.error?.message || 'T
 /** Pipeline order: sources change first, then the library, then projects. */
 const STAGE: Record<ChangeKind, number> = {
   'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.order': 0, 'source.fetch': 1,
-  'library.rebuild': 2, 'project.add': 3, 'project.forget': 3, 'project.wire': 4, 'project.verify': 5,
+  'library.rebuild': 2, 'set.save': 2, 'set.remove': 3, 'project.add': 3, 'project.forget': 3, 'project.wire': 4, 'project.verify': 5,
 };
 
 /** Steps that stand alone, as on the server: a fetch or a check that cannot be made does not cancel the others. */
@@ -210,7 +210,7 @@ export class Store {
     return items.map((item, i) => {
       const before = items.slice(0, i);
       const deferred = item.change.kind === 'library.rebuild' ? before.length > 0
-        : item.change.kind === 'project.wire' ? before.some(b => b.change.kind === 'library.rebuild')
+        : item.change.kind === 'project.wire' ? before.some(b => ['library.rebuild', 'set.save'].includes(b.change.kind))
         : item.change.kind === 'source.fetch' ? before.some(b => b.change.kind === 'source.attach')
         : item.change.kind === 'project.verify' ? before.some(b => ['project.wire', 'library.rebuild'].includes(b.change.kind))
         : false;
@@ -223,7 +223,7 @@ export class Store {
     if (!item.preview) return false;
     if (item.preview.ok) return true;
     // Waiting on an earlier queued step (a library a rebuild will create, a source an attach will add) is not a block.
-    return item.deferred && item.preview.conflicts.every(c => /library has not been built|No Git source called|does not exist yet\. Wire the agent first/i.test(c));
+    return item.deferred && item.preview.conflicts.every(c => /library has not been built|No Git source called|has not been built yet|No set called|does not exist yet\. Wire the agent first/i.test(c));
   }
 
   /** One preview at a time (the server runs one change job at a time); items queued meanwhile are picked up by the same loop. */
@@ -316,6 +316,15 @@ export class Store {
   verifyMany(items: { projectId: string; target: string }[]) {
     if (!items.length) return;
     this.queue(...items.map(i => ({ kind: 'project.verify' as const, args: { projectId: i.projectId, target: i.target } })));
+  }
+  /** Save a set: create it, or with replace change the rules of one that exists. It is built when applied. */
+  saveSet(name: string, rules: SetRule[], replace: boolean) { this.queue({ kind: 'set.save', args: { name, rules, replace } }); }
+  removeSet(name: string) { this.queue({ kind: 'set.remove', args: { name } }); }
+  /** Point one agent at a set, or with null back at the whole library. */
+  readSet(projectId: string, target: TargetReport | string, set: string | null) {
+    const id = typeof target === 'string' ? target : target.id;
+    if (!set) { this.wire(projectId, [id], { writeDocs: false, repoint: true }); return; }
+    this.queue({ kind: 'project.wire', args: { projectId, targets: [id], writeDocs: false, link: 'auto', repoint: true, set } });
   }
   copyFor(projectId: string, target: TargetReport) { this.wire(projectId, [target.id], { writeDocs: false, link: 'copy' }); }
 
