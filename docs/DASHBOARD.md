@@ -23,6 +23,12 @@ Open the printed `http://127.0.0.1:<port>` address. Ctrl+C stops it. Options:
 
 Projects you add in the dashboard are remembered in `~/.agentforge/projects.json`, so you normally start it with no options.
 
+## How it looks
+
+The dashboard is dark, with one orange accent that means "your action": the primary button, anything you have queued or selected, links and the keyboard focus ring. State is never colour alone, it is always written too: green is quiet (it is fine), yellow asks for a look, red is broken. Every text colour is at least 4.5:1 on the surface it sits on, and a browser test checks the pairs.
+
+Type is Inter for text and Roboto Mono for paths and file text, at 14 px by default so more fits on a screen; zoom the page to make it larger. Both fonts are bundled with the dashboard, so nothing is fetched from outside.
+
 ## The pages
 
 The dashboard is built for many sources and many projects. Lists you can search and filter come first, one item opens at a time in a side panel, and the cable map is drawn for one project or one folder at a time, so nothing becomes a tangle however much you manage.
@@ -46,6 +52,7 @@ Things to know:
 - **Open one.** Click a name to open it in the side panel. For a source: kind, path, state, revision, its place in the order with *Move up* and *Move down*, *Show its skills*, *Fetch updates* (Git sources) and *Detach*. For a project: each agent's state, its instruction file, how to call a skill in that tool, the fix that applies (*Repoint*, *Copy instead*, *Refresh copy*, *Verify*), *Wire agents*, *Show wiring*, and *Remove from list* for projects you added. Esc or *Close details* returns focus to the row you came from; on a narrow screen the panel takes the place of the lists.
 - **Several at once.** Tick Git sources or projects (a folder's box ticks every project in it, a table header's box ticks everything showing). A bar shows what is selected with **Fetch selected** and **Verify selected**. Fetching queues one fetch per Git source and a single rebuild. Verifying queues one check for each working agent the tool has not confirmed, or confirmed before the skills changed, and sends one short question per agent, on your account, only when you apply. Both only queue changes for review, and work already in the review sheet is not counted twice. Selections you cannot currently see (filtered away, or in a list the layout hides) are counted as "not showing", so a bulk action never touches something out of sight without saying so.
 
+- **What changed since the last build.** The library is a folder of links, so a Git update can change a skill's content without any link changing. Each build records what it held (`~/.agentforge/lock.json`: source, revision and a content digest per skill). The Library card then shows a *Since the last build* line, for example "2 added, 1 content changed", which opens to the skill names, and the rebuild preview names the skills whose content changed. The record is only compared with: the library is always computed from your sources on disk, and a missing or damaged record just means there is nothing to compare with. `agentforge update` and `repo sync` print the same.
 - **Everything at once.** Under the counts, **Fetch all updates (n)** queues every Git source plus one rebuild, and **Check all agents (n)** queues a check for every working agent the tool has not confirmed. Each is one list in the review sheet, and the count is exact: anything already waiting is not counted again. A source or an agent that fails does not stop the others. When a rebuild is waiting in the review sheet, it offers to add checks for the agents that read the library through a link, since a rebuild changes what they see. The same two jobs on the command line are `agentforge update` and `agentforge check`.
 
 Agents are named for what they are: Claude Code (`CLAUDE.md`, `.claude/skills`), Codex (`AGENTS.md`, `.codex/skills`), Cursor and others (`AGENTS.md`, `.agents/skills`), Gemini CLI (`GEMINI.md`, `.gemini/skills`).
@@ -57,15 +64,28 @@ How skills travel, drawn as cables: **Sources**, then the **Library**, then **Pr
 | Cable | Meaning |
 | :-- | :-- |
 | Green | Live: this source feeds the library, or this agent reads the library |
-| Amber, from your vault | The agent reads your vault directly and misses everything you attached |
-| Short amber stub | The agent reads some other folder |
+| Yellow, from your vault | The agent reads your vault directly and misses everything you attached |
+| Short yellow stub | The agent reads some other folder |
 | Short red stub, dashed | The agent's link is broken |
-| Dashed indigo | A change you queued but have not applied |
+| Dashed orange | A change you queued but have not applied |
 | Dashed grey | A source that is not available (missing, or a Git source not downloaded yet) |
 
 The same state is always written next to the cables in words. Repoint, copy, verify and wire work here exactly as in the panel, and each queues a change in the review sheet. On a narrow window, or zoomed in, the columns stack and the cables are hidden.
 
 The map's address is `/map?project=<id>` or `/map?group=<folder>&page=<n>`; a page outside the folder is brought back inside it. `/fleet`, the address the fleet view was first shown at, still arrives at the home page.
+
+### Sets
+
+The library holds every skill, and an agent can only choose among the descriptions that fit its listing budget. A **set** is a shortlist of the library: an agent that reads a set sees every one of its descriptions. The **Sets** page lists the whole library and each set side by side, with how many skills it holds, a bar for how much of its listing an agent will see (amber when some descriptions will not fit), how many agents read it, and *Delete*.
+
+**Create a set** opens the editor. Everything in it is local until *Save set*, which queues one change in the review sheet:
+
+- **Rules, on the left.** Add a rule by *category*, *name pattern* (`orcaflex-*`, where `*` is any run of characters and `?` one), *source*, or one *skill*. Each rule shows how many skills it selects and how many of those are new. A rule that selects nothing is flagged and *Save set* stays off until it is removed or changed. Rules apply in order; a skill two rules both select is counted once.
+- **The list, on the right.** Every skill in the library with a box: ticked means it is in the set, and the note beside it says why (the rule, "picked by hand", "left out" or "not in this set"). Ticking a skill adds it by hand, or puts back one that was left out; unticking removes a hand pick, or leaves out one a rule brought in. Search it, or show only what is in or out of the set, or has no category.
+- **The budget, above the list.** Updates as you add and tick, so you can stop where every description fits. It is an estimate (about 8,000 characters of descriptions, shortest first), worded "about".
+- **Opening a set again** loads its rules. Its name cannot change; saving replaces its rules, and every agent that reads it sees the new list at once.
+
+**Choosing what an agent reads.** In a project's panel, once any set exists, each wired agent has *Change what Claude Code reads* (and so on). It offers the whole library or any set with each one's skill count and fit, and says plainly what changes: the agent's one skills folder will link to `~/.agentforge/views/<set>`, and **the skills outside the set are not available to that agent at all, not even by name**. *Review this change* queues it. Fleet shows the choice in the agent's chip (`Claude Code · offshore`) and its status, and the Library card has a line: how many sets, how many agents read one, how many read the whole library. A set cannot be deleted while an agent reads it. A set is built as its own folder of links with the library, and a rebuild offers to check the agents that read one.
 
 ### Skills
 
@@ -76,7 +96,7 @@ Every skill found in every source, searchable and filterable by source. Switch b
 Nothing you click writes to disk directly. Each action adds one or more steps to the **review sheet** at the bottom of the screen:
 
 1. Click an action, for example *Attach a repository*. The sheet opens with the steps it needs, in pipeline order: sources first, then the library, then projects. Attaching a folder, for instance, queues *Attach* and *Rebuild the library*, because attached skills only reach your agents through the library.
-2. Each step is checked against your folders and described in plain words: what will be written, linked, unlinked or deleted. Lines are colour-coded: green adds, red removes, indigo changes, amber needs your attention.
+2. Each step is checked against your folders and described in plain words: what will be written, linked, unlinked or deleted. Lines are colour-coded: green adds, red removes, orange changes, yellow needs your attention.
 3. If a step cannot be made, it says why, and *Apply* is disabled until you remove it. A step that only depends on an earlier queued step (wiring a project to a library a queued rebuild will create) is not treated as blocked.
 4. *Apply* runs the steps in order, one at a time, and shows how many are done. Each one is planned again against the disk immediately before it runs, so a preview that went out of date cannot be applied blindly. If a step is refused or fails, the steps after it are not run. The exception is a fetch or a check of an agent: one of those that fails never stops the others, so a repository that cannot be reached does not cancel the rest, and the library is still rebuilt from what is on disk. Steps run one request each so a long list of checks, each of which can take a while, stays inside the server's time limit.
 5. The sheet shows what actually happened for each step, then the page refreshes.
@@ -91,6 +111,9 @@ Nothing you click writes to disk directly. Each action adds one or more steps to
 | Choose a winner | Saves `preferences` in `~/.agentforge/config.json`; `agentforge repo sync` honours it too | Rename or edit either skill |
 | Add / remove a project | Edits `~/.agentforge/projects.json` | Touch the project folder |
 | Wire agents | Writes missing instruction files, links `<agent>/skills` to the library, adds that link to `.gitignore` | Overwrite an existing instruction file, or merge into a folder linked elsewhere |
+| Save a set | Writes its rules to `~/.agentforge/sets.json` and builds its folder of links in `~/.agentforge/views/<set>/` from the library's winners | Copy or edit a skill, or write into a source or your vault |
+| Remove a set | Removes its rules and its folder of links. Refused while an agent reads it | Touch the skills |
+| Read a set (per agent) | Repoints that one agent's skills folder at the set's folder, or back at the library | Touch the folder it pointed at before |
 | Repoint | Removes the old link and links to the library | Touch the folder the old link pointed at |
 
 The dashboard wires projects to the **library**, never directly to your vault, so attached sources and your collision choices always reach your agents. Use the command line if you deliberately want a vault-only link.

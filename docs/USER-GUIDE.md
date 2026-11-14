@@ -2,7 +2,7 @@
 
 This guide is for an engineer who has never used Agentforge. It explains what the tool is for, the five words you need to know, how to do the everyday jobs, and what to do when something refuses to run. Read sections 1 to 4 once; keep sections 5 onward as reference.
 
-> **Status.** Everything in this guide works today except the parts marked **[planned]**: the terminal menu (`agentforge` with no arguments), profiles, and the `af-manage` harness entry. For interactive use, the **dashboard** exists now and does what the planned menu describes, in a browser: see [DASHBOARD.md](DASHBOARD.md). The remembered project list it uses is `~/.agentforge/projects.json`.
+> **Status.** Everything in this guide works today except the parts marked **[planned]**: the terminal menu (`agentforge` with no arguments) and the `af-manage` harness entry. For interactive use, the **dashboard** exists now and does what the planned menu describes, in a browser: see [DASHBOARD.md](DASHBOARD.md). The remembered project list it uses is `~/.agentforge/projects.json`.
 
 ---
 
@@ -25,7 +25,7 @@ What it deliberately does **not** do: run skills, edit your hand-written instruc
 | **Vault** | Your own skills. One folder, one skill per sub-folder, each with `SKILL.md`. Agentforge never writes into it. | `D:\Repos\LLM\llm-skill-vault\skills` (configurable) |
 | **Source** | A registered place skills come from: a local folder or a git repository. Your vault is the *primary* source; the rest are attached. | `~/.agentforge/repos.json`; git clones in `~/.agentforge/repos/` |
 | **View** | A generated folder of links, one per skill, built from the vault plus the attached sources. It is an output. Delete it and rebuild it any time; never edit it. | `~/.agentforge/merged-skills/` |
-| **Profile** **[planned]** | A named selection of skills (include, exclude, extends). Each profile is built as its own view, so a project can see a subset. | `~/.agentforge/profiles.json`, views in `~/.agentforge/views/<profile>/` |
+| **Set** | A named shortlist of the library, made by rules (skill, name pattern, source, category). It is built as its own folder of links, so a project can read a set instead of the whole library and an agent sees every one of its descriptions. | `~/.agentforge/sets.json`, folders in `~/.agentforge/views/<set>/` |
 | **Target** | The contract one AI tool expects: which instruction file and which dot-folder. | `claude` → `CLAUDE.md` + `.claude/`, `codex` → `AGENTS.md` + `.codex/`, `generic` → `AGENTS.md` + `.agents/`, `gemini` → `GEMINI.md` + `.gemini/` |
 
 A **project** is any folder you point Agentforge at. Wiring a project means: instruction file written, `<dot>/skills` linked to a view, `<dot>/skills` added to `.gitignore`.
@@ -151,8 +151,8 @@ Running `agentforge` with no arguments opens a menu. It is the same operations a
 agentforge
   1  Sources      list · attach local folder · attach git URL · fetch · detach
   2  Skills       browse vault and each source · search · open a SKILL.md · show collisions
-  3  Views        build default view · profiles: list · create · edit · build · preview
-  4  Projects     attach a project · pick targets and profile · preview · apply · doctor
+  3  Views        build default view · sets: list · create · show · build · remove
+  4  Projects     attach a project · pick targets and set · preview · apply · doctor
   5  Doctor       vault, views and every remembered project
   /  search       q  quit
 ```
@@ -219,16 +219,36 @@ agentforge repo sync --no-fetch
 
 Remove unregisters the source and deletes its cached clone if it was a git source. It never deletes a local folder you registered. The view is not rebuilt automatically; the second command does that.
 
-### 6.7 Use a profile **[planned]**
+### 6.7 Give a project fewer skills: a set
+
+The library holds every skill, and an agent can only choose among the descriptions that fit its listing budget (`agentforge doctor` shows how many do). A **set** is a shortlist: an agent that reads a set sees every one of its descriptions.
 
 ```
-agentforge profile create backend --include "vault/*" --include "mattpocock/tdd" --exclude "vault/frontend-*"
-agentforge repo sync                      # builds merged-skills AND views/backend
-agentforge link --profile backend         # this project now sees only the backend selection
-agentforge doctor                         # reports: linked to profile "backend"
+agentforge set create offshore --include category:offshore-engineering --include "name:orcaflex-*" --include skill:mooring-design --exclude skill:orcaflex-batch-manager
+agentforge set show offshore                 # its rules, each with how many skills it selected, its skills, and how much of its listing fits
+agentforge link --path D:\Repos\my-app --target claude --set offshore
+agentforge doctor --path D:\Repos\my-app    # says: reads set offshore
 ```
 
-A profile can `extends` another. A cycle is an error.
+A rule is `type:value`, and the type is one of:
+
+| Type | Selects | Example |
+|---|---|---|
+| `skill` | one skill by name (what you pick by hand) | `skill:mooring-design` |
+| `name` | names matching a pattern, `*` any run of characters, `?` one character | `name:orcaflex-*` |
+| `source` | every skill the library took from a source (`vault` is your primary vault) | `source:obra-superpowers` |
+| `category` | every skill whose own `category` says so | `category:offshore-engineering` |
+
+Excludes are applied after includes, so `--exclude skill:x` removes `x` even when a category brought it in. Case does not matter. A rule that selects no skill is refused, so a typo is never saved quietly.
+
+How a set behaves:
+
+- **It follows the library.** A set is made from the skills the library chose, so your same-name choices and source order already apply. It never holds a copy and never writes into a source or your vault.
+- **It is built with the library.** `agentforge update` and `repo sync` rebuild every set, so a set is never behind the library. `agentforge set build [name]` rebuilds sets alone.
+- **It is chosen per agent.** `link --set` changes where one agent's skills folder points. Claude Code can read a set while Codex in the same project reads the whole library.
+- **The other skills are not there.** An agent reading a set does not have the skills outside it, not even by name. That is the point; it differs from the whole library, where skills that miss the budget can still be called by name.
+- **It is never a source.** `repo add` refuses a set's folder, and so does `--vault`.
+- **Removing one is guarded.** `agentforge set remove NAME` is refused while an agent in a remembered project reads it; `--force` removes it and those links break (`agentforge link --target ...` points them elsewhere).
 
 ### 6.8 Check everything
 
@@ -281,7 +301,7 @@ Use the `--path` spelling after `--`; the harness matches required arguments lit
 agentforge init   [--path P] [--target claude|codex|generic|gemini|all] [--name N] [--stack S]
                   [--owner O] [--build C] [--test C] [--run C] [--vault V]
                   [--link junction|symlink|copy|none|auto] [--dry-run] [--force] [--no-preserve]
-agentforge link   [--path P] [--target T] [--vault V] [--link L] [--dry-run] [--force] [--no-preserve]
+agentforge link   [--path P] [--target T] [--vault V | --set NAME] [--link L] [--dry-run] [--force] [--no-preserve]
 agentforge doctor [--path P] [--vault V] [--json]
 agentforge repo add <url-or-path> [--name ID] [--branch B]
 agentforge repo remove <ID>
@@ -291,6 +311,11 @@ agentforge repo sync [--vault V] [--force] [--no-fetch] [--dry-run]
 agentforge update [--vault V] [--force] [--no-fetch] [--dry-run]     # same as repo sync
 agentforge verify [--path P] [--target T] [--tool TOOL] [--json]
 agentforge check  [--path P] [--dry-run] [--json]
+agentforge set create <name> --include type:value [--include ...] [--exclude type:value ...] [--force]
+agentforge set list [--json]
+agentforge set show <name> [--json]
+agentforge set build [name] [--dry-run]
+agentforge set remove <name> [--force]
 agentforge help
 ```
 
@@ -342,7 +367,9 @@ Agentforge prefers a clear refusal to a guess. The common ones:
 | `~/.agentforge/config.json` | Optional `vaultRoot` | Yes; falls back to env var or default |
 | `~/.agentforge/repos/<id>/` | Git clones | Yes; `repo fetch` recreates them |
 | `~/.agentforge/merged-skills/` | The default view (links only) | Yes; `repo sync --no-fetch` recreates it |
-| `~/.agentforge/views/<profile>/` **[planned]** | Profile views | Yes; same |
+| `~/.agentforge/lock.json` | What the last build held: for each skill its source, the source's revision and a digest of its content. `update` and `repo sync` compare against it to say what changed since. It is only ever compared with, never trusted over the folders on disk | Yes; the next build writes it again, and until then there is simply nothing to compare with |
+| `~/.agentforge/sets.json` | The rules of every set | Yes; you lose the sets, not the skills |
+| `~/.agentforge/views/<set>/` | One folder of links per set | Yes; `set build` recreates it |
 | `~/.agentforge/projects.json` | Projects remembered by the dashboard | Yes; you lose the list, not the projects |
 | `<project>/<dot>/skills` | A link (or, with `copy`, a copy) | Yes; `link` recreates it |
 | `<project>/CLAUDE.md` etc. | Yours after the first write | **No** |
