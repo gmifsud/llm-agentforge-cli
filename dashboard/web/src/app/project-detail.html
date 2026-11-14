@@ -38,6 +38,29 @@
     }
   </ul>
   @if (shown().length && unwired()) { <p class="fine">Not wired: {{ unwired() }}</p> }
+  @if (choosable().length && !choosingTarget()) {
+    <div class="actions">
+      @for (t of choosable(); track t.id) {
+        <button type="button" class="quiet tiny" (click)="openChoice(t)" [disabled]="s.applying()">Change what {{ agents[t.id] }} reads</button>
+      }
+    </div>
+  }
+  @if (choosingTarget(); as t) {
+    <div class="choosebox" role="group" [attr.aria-label]="'What ' + agents[t.id] + ' reads'">
+      <h3>Change what {{ agents[t.id] }} reads</h3>
+      @for (o of options(); track o.value) {
+        <label class="inline">
+          <input type="radio" name="reads" [value]="o.value" [checked]="choice() === o.value" (change)="choice.set(o.value)">
+          <span><b>{{ o.label }}</b> <span class="fine">{{ o.count }} skills · {{ o.fit.fits ? 'every one fits' : 'about ' + o.fit.kept + ' fit' }}</span></span>
+        </label>
+      }
+      @if (preview()) { <div class="preview"><b>If you choose this:</b><p class="fine">{{ preview() }}</p></div> }
+      <div class="actions">
+        <button type="button" class="primary" (click)="applyChoice()" [disabled]="!changed() || s.applying()">Review this change</button>
+        <button type="button" class="quiet" (click)="choosing.set('')">Cancel</button>
+      </div>
+    </div>
+  }
 }
 
 @if (wiring()) {

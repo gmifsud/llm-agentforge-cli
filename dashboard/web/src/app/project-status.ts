@@ -25,12 +25,13 @@ export function summarise(report: ProjectReport): ProjectSummary {
     return { health: 'fault', text, agents: [], working: 0, unverified: 0, lastVerified: null };
   }
   const wired = report.targets.filter(t => t.feeds !== 'none');
-  const agents: AgentChip[] = wired.map(t => ({ id: t.id, name: AGENTS[t.id] || t.id, ...agentState(t) }));
+  const agents: AgentChip[] = wired.map(t => ({ id: t.id, name: `${AGENTS[t.id] || t.id}${t.feeds === 'set' && t.set ? ` · ${t.set}` : ''}`, ...agentState(t) }));
+  const onSet = wired.filter(t => t.feeds === 'set'), onLibrary = wired.filter(t => t.feeds === 'library');
   const faults = agents.filter(a => a.tone === 'fault'), cautions = agents.filter(a => a.tone === 'caution');
   const health: Health = faults.length ? 'fault' : cautions.length ? 'caution' : agents.length ? 'ok' : 'none';
   const worst = faults.length ? faults : cautions;
   const text = worst.length ? worst[0].text + (worst.length > 1 ? ` (and ${worst.length - 1} more)` : '')
-    : agents.length ? (agents.every(a => a.tone === 'live') ? 'Reads the library' : 'Set up') : 'No agents wired';
+    : agents.length ? (agents.every(a => a.tone === 'live') ? readsText(onSet.map(t => t.set), onLibrary.length > 0) : 'Set up') : 'No agents wired';
   const working = wired.filter(isWorking);
   const times = wired.map(t => t.verification?.at).filter((x): x is string => !!x).sort();
   return { health, text, agents, working: working.length, unverified: working.filter(t => !isVerified(t)).length, lastVerified: times.length ? times[times.length - 1] : null };
@@ -90,7 +91,10 @@ export function groupRows(rows: ProjectRow[]): ProjectGroup[] {
     const path = row.report.project.path, parts = parentParts(path), sep = path.includes('\\') ? '\\' : '/';
     const key = parts.join('/').toLowerCase();
     const folder = parts.length ? parts.join(sep) : sep;
-    const label = parts.length ? parts.slice(-2).join(sep) : sep;
+    // A drive letter or a leading slash is not a folder name, so D:\Repos is headed Repos. Only a project sitting directly
+    // in a drive root is left with the drive, because it has nothing else to be named by.
+    const named = parts.filter((p, i) => !(i === 0 && (p === '' || /^[A-Za-z]:$/.test(p))));
+    const label = named.length ? named.slice(-2).join(sep) : (parts.join(sep) || sep);
     const group = groups.get(key) ?? { key, label, folder, rows: [] };
     group.rows.push(row); groups.set(key, group);
   }
@@ -114,4 +118,12 @@ export function pendingChecks(reports: ProjectReport[], waiting: (item: CheckIte
   return reports
     .flatMap(r => verifiableTargets(r).filter(only).map(t => ({ projectId: r.project.id, target: t.id })))
     .filter(item => !waiting(item));
+}
+
+/** What an all-fine project reads, in a few words: the library, one set, several sets, or the library and a set. */
+function readsText(sets: (string | null)[], alsoLibrary: boolean) {
+  if (!sets.length) return 'Reads the library';
+  if (alsoLibrary) return 'Reads the library and sets';
+  const one = new Set(sets);
+  return one.size === 1 ? `Reads the set ${sets[0]}` : 'Reads sets';
 }

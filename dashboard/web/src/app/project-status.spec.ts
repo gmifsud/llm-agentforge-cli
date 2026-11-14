@@ -4,7 +4,7 @@ import type { Feeds, ProjectReport, TargetReport } from './store';
 
 const target = (id: string, feeds: Feeds, over: Partial<TargetReport> = {}): TargetReport => ({
   id, dir: `.${id}`, doc: 'X.md', docExists: true, optIn: false, copy: null, verification: null, kind: 'link', health: 'link',
-  resolvedTarget: null, feeds, entries: null, match: 'matches', ...over,
+  resolvedTarget: null, feeds, set: null, entries: null, match: 'matches', ...over,
 });
 const verified = (stale = false) => ({ level: 'verified' as const, tool: 't', detail: '', at: '2026-11-12T10:00:00.000Z', stale });
 const report = (path: string, targets: TargetReport[] = [], over: Partial<ProjectReport> = {}): ProjectReport => ({
@@ -48,6 +48,26 @@ describe('a project at a glance', () => {
     expect(verifiedText(summarise(report('D:\\a', [target('claude', 'library')])), when)).toBe('Not checked');
     expect(verifiedText(summarise(report('D:\\a', [target('claude', 'library', { verification: verified() }), target('codex', 'library')])), when)).toBe('1 of 2 not verified');
     expect(verifiedText(summarise(report('D:\\a', [target('claude', 'library', { verification: verified() })])), when)).toBe('Verified then');
+  });
+});
+
+describe('an agent that reads a set', () => {
+  const onSet = (id: string, set: string) => target(id, 'set', { set });
+  it('shows its set in its chip, and counts as working so it can be checked', () => {
+    const s = summarise(report('/work/a', [onSet('codex', 'offshore')]));
+    expect(s.agents.map(a => [a.name, a.text, a.tone])).toEqual([['Codex · offshore', 'Reads the set offshore', 'live']]);
+    expect(s.health).toBe('ok');
+    expect([s.working, s.unverified]).toEqual([1, 1]);
+    expect(verifiableTargets(report('/work/a', [onSet('codex', 'offshore')])).map(t => t.id)).toEqual(['codex']);
+  });
+
+  it('the project says what it reads: a set, several sets, the library, or the library and sets', () => {
+    const text = (...t: TargetReport[]) => summarise(report('/work/a', t)).text;
+    expect(text(onSet('codex', 'offshore'))).toBe('Reads the set offshore');
+    expect(text(onSet('codex', 'offshore'), onSet('claude', 'offshore'))).toBe('Reads the set offshore');
+    expect(text(onSet('codex', 'offshore'), onSet('claude', 'backend'))).toBe('Reads sets');
+    expect(text(target('codex', 'library'))).toBe('Reads the library');
+    expect(text(target('codex', 'library'), onSet('claude', 'offshore'))).toBe('Reads the library and sets');
   });
 });
 
@@ -137,6 +157,19 @@ describe('grouping by folder', () => {
     const groups = groupRows([row('D:\\solo', 'vault'), row('D:\\other', 'library')]);
     expect(groups.length).toBe(1); expect(groups[0].label).toBe('D:');
     expect(groupHealth(groups[0])).toBe('caution'); expect(groupAttention(groups[0])).toBe(1);
+  });
+
+  it('does not show the drive letter: D:\\Repos reads as Repos', () => {
+    expect(groupRows([row('D:\\Repos\\app')])[0].label).toBe('Repos');
+    expect(groupRows([row('D:\\Repos\\LLM\\app')])[0].label).toBe('Repos\\LLM');
+    expect(groupRows([row('/repos/app')])[0].label).toBe('repos');
+    // A project directly in the drive root has nothing but the drive to be named by.
+    expect(groupRows([row('D:\\solo')])[0].label).toBe('D:');
+    expect(groupRows([row('/solo')])[0].label).toBe('/');
+    // The same folder name on two drives is two places, so they are told apart by their full path.
+    expect(groupRows([row('C:\\Repos\\a'), row('D:\\Repos\\b')]).map(g => g.label).sort()).toEqual(['C:\\Repos', 'D:\\Repos']);
+    // The full path is still available for the tooltip.
+    expect(groupRows([row('D:\\Repos\\app')])[0].folder).toBe('D:\\Repos');
   });
 
   it('is deterministic whatever order the projects arrive in', () => {
