@@ -932,3 +932,85 @@ test('sets: an agent reads a set from the project panel, Fleet and the library c
   expect(fs.existsSync(viewOf('ui'))).toBe(false);
   expect(fs.existsSync(path.join(f.vault, 'sql-review'))).toBe(true);       // the skills themselves are untouched
 });
+
+test('hidden skills and unmanaged folders: set a personal skill aside and restore it, and adopt a folder of your own, all through the review sheet', async ({ page }, info) => {
+  const { WriteService } = require('../../server/write-service');
+  const personal = path.join(f.homedir, '.claude', 'skills', 'browser-testing');
+  fs.mkdirSync(personal, { recursive: true });
+  fs.writeFileSync(path.join(personal, 'SKILL.md'), '---\nname: browser-testing\ndescription: my own take\n---\nmy steps\r\n');
+  fs.writeFileSync(path.join(personal, 'extra.md'), 'only mine\n');
+  const unmanaged = path.join(f.root, 'unmanaged');
+  const folder = path.join(unmanaged, '.claude', 'skills');
+  fs.mkdirSync(path.join(folder, 'mine'), { recursive: true });
+  fs.writeFileSync(path.join(folder, 'mine', 'SKILL.md'), '---\nname: mine\n---\nonly here\n');
+  fs.mkdirSync(path.join(folder, 'frontend-design'));
+  fs.writeFileSync(path.join(folder, 'frontend-design', 'SKILL.md'), '---\nname: frontend-design\n---\nmy version\n');
+  // The library is built, and the dashboard now knows the unmanaged project too.
+  new WriteService(f.options).apply([{ kind: 'library.rebuild' }]);
+  await app.close();
+  app = await createDashboard({ options: { ...f.options, projects: [f.project, unmanaged] } });
+  await page.goto(`${app.url}/library`);
+
+  // ─── Set aside, from the Skills page ───
+  await page.locator('[data-skill]', { hasText: 'browser-testing' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Skill details' });
+  await expect(inspector).toContainText('your own skill has the same name and is used instead of this one');
+  await expect(inspector.locator('.shadow-paths')).toContainText(personal);
+  await expect(inspector.locator('.shadow-paths')).toContainText(path.join(f.source, 'browser-testing'));
+  await expect(inspector).toContainText('Different content: the descriptions differ');
+  await page.screenshot({ path: info.outputPath('hidden-skill.png'), fullPage: true });
+
+  const mine = contentSnapshot(personal);
+  const before = contentSnapshot(f.root);
+  await inspector.getByRole('button', { name: 'Set aside your browser-testing for Claude Code' }).click();
+  await expect(tray(page)).toContainText('Move your personal claude skill browser-testing');
+  await expect(tray(page)).toContainText('Nothing is deleted or copied');
+  expect(contentSnapshot(f.root)).toEqual(before);                         // a queued change writes nothing
+  await expect(inspector).toContainText('Will be set aside when you apply');
+  await applyAll(page, 1);
+
+  const held = path.join(f.homedir, '.agentforge', 'set-aside', 'claude', 'browser-testing');
+  expect(fs.existsSync(personal)).toBe(false);
+  expect(contentSnapshot(held)).toEqual(mine);                             // moved whole, byte for byte
+  await expect(page.getByRole('region', { name: 'Set aside' })).toContainText('browser-testing');
+
+  // ─── Restore, from the Library card on Fleet ───
+  await page.goto(`${app.url}/`);
+  const card = page.getByRole('article', { name: 'Library' });
+  await expect(card).toContainText('Your own skills moved out of the way. Nothing was deleted.');
+  await expect(card).toContainText(`Restore puts it back at ${personal}`);
+  await page.screenshot({ path: info.outputPath('set-aside-card.png'), fullPage: true });
+  await card.getByRole('button', { name: 'Restore browser-testing for Claude Code' }).click();
+  await expect(tray(page)).toContainText('back');
+  await applyAll(page, 1);
+  expect(contentSnapshot(personal)).toEqual(mine);                         // back exactly as it was
+  expect(fs.existsSync(held)).toBe(false);
+  await expect(card).not.toContainText('Your own skills moved out of the way');
+
+  // ─── Adopt, from the project panel ───
+  await page.locator('[data-select^="project:"]', { hasText: 'unmanaged' }).click();
+  const drawer = page.getByRole('complementary', { name: 'Details' });
+  await expect(drawer).toContainText('not managed here');
+  await drawer.getByRole('button', { name: 'Adopt the skills folder of Claude Code in unmanaged' }).click();
+  const box = drawer.getByRole('group', { name: 'Adopt the Claude Code skills folder' });
+  await expect(box).toContainText('Yours, kept as they are: mine');
+  await expect(box).toContainText('1 has the same name as a library skill; yours is kept');
+  await expect(box).toContainText('Git will show the added folders as untracked files');
+  await page.screenshot({ path: info.outputPath('adopt-box.png'), fullPage: true });
+
+  const ownBefore = [contentSnapshot(path.join(folder, 'mine')), contentSnapshot(path.join(folder, 'frontend-design'))];
+  const projectBefore = contentSnapshot(unmanaged);
+  await box.getByRole('button', { name: 'Review this change' }).click();
+  await expect(tray(page)).toContainText('Copy 2 missing skills into .claude/skills');
+  await expect(tray(page)).toContainText('untracked');
+  expect(contentSnapshot(unmanaged)).toEqual(projectBefore);
+  await expect(drawer).toContainText('Will be adopted when you apply');
+  await applyAll(page, 1);
+
+  expect(fs.readdirSync(folder).sort()).toEqual(['browser-testing', 'frontend-design', 'mine', 'sql-review']);
+  expect([contentSnapshot(path.join(folder, 'mine')), contentSnapshot(path.join(folder, 'frontend-design'))]).toEqual(ownBefore);   // yours, byte for byte
+  const marker = JSON.parse(fs.readFileSync(path.join(unmanaged, '.claude', '.agentforge-skills.json'), 'utf8'));
+  expect(marker.names).toEqual(['browser-testing', 'sql-review']);          // only what was added
+  await expect(drawer).toContainText('Has a copy of the library, up to date');
+  await expect(drawer.getByRole('button', { name: /^Adopt the skills folder/ })).toHaveCount(0);
+});
