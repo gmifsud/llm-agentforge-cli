@@ -29,7 +29,22 @@ export interface Collision {
 export type AgentTool = 'claude' | 'codex' | 'gemini' | 'cursor';
 export interface LintFinding { skillId: string; skill: string; code: string; severity: 'error' | 'warn' | 'info'; tools: AgentTool[]; message: string }
 export interface ListingBudget { entries: number; withoutDescription: number; descriptionChars: number; budgetChars: number; kept: number; dropped: number; fits: boolean }
-export interface Shadow { name: string; tool: AgentTool; level: string; path: string; skillId: string | null }
+/**
+ * A personal skill that hides a library skill of the same name. path is the personal folder, libraryPath the folder
+ * the library takes its copy from. same: the two have identical content (null when either could not be read or is too large).
+ */
+export interface Shadow {
+  name: string; tool: AgentTool; level: string; path: string; skillId: string | null;
+  libraryPath: string | null; same: boolean | null;
+  personalDescription: string; libraryDescription: string; personalFiles: number | null; libraryFiles: number | null;
+}
+/** A personal skill that was set aside. from: where Restore puts it back. heldAt: where it is now. restorable: nothing sits at `from` now. */
+export interface SetAsideItem { tool: AgentTool; name: string; at: string | null; from: string; heldAt: string; restorable: boolean }
+/**
+ * A skills folder of the owner's own that nothing here manages. own: skills only here. shared: same name as a library skill (yours is kept).
+ * incoming: library skills Adopt would copy in. others: entries that are not skills.
+ */
+export interface Adoptable { own: string[]; shared: string[]; incoming: number; others: number }
 export interface LibraryHealth { findings: LintFinding[]; counts: { error: number; warn: number; info: number }; budget: ListingBudget; shadows: Shadow[] }
 export interface LibraryState {
   path: string; built: boolean; builtAt: string | null; invalid: boolean; size: number;
@@ -40,7 +55,7 @@ export type Feeds = 'library' | 'set' | 'vault' | 'elsewhere' | 'broken' | 'copy
 export interface Verification { level: 'verified' | 'partial' | 'not-listed' | 'unreliable' | 'not-wired' | 'unavailable'; tool: string; detail: string; at: string; stale: boolean }
 export interface CopyInfo { state: 'fresh' | 'stale'; copiedAt: string | null }
 export interface TargetReport {
-  id: string; dir: string; doc: string; docExists: boolean; optIn: boolean; copy: CopyInfo | null; verification: Verification | null; kind: string; health: string;
+  id: string; dir: string; doc: string; docExists: boolean; optIn: boolean; copy: CopyInfo | null; /** null unless the folder is unmanaged and the library is built. */ adoptable: Adoptable | null; verification: Verification | null; kind: string; health: string;
   resolvedTarget: string | null; feeds: Feeds; /** The set this agent reads, when feeds is set. */ set: string | null; entries: number | null; match: 'matches' | 'differs' | 'unknown';
 }
 export interface ProjectReport {
@@ -62,6 +77,8 @@ export interface Catalog {
   sinceLastBuild: LockChanges | null;
   /** The stored skill sets. */
   sets: SetInfo[];
+  /** What is set aside from the personal folders now. */
+  setAside: SetAsideItem[];
 }
 export interface CompareSide { id: string; sourceId: string; name: string; relativePath: string; digest: string | null; changedAt: string | null; fileCount: number | null; scriptCount: number | null }
 export interface DiffHunk { type: 'same' | 'add' | 'del' | 'skip'; text?: string; count?: number; a?: number; b?: number }
@@ -73,7 +90,7 @@ export interface SkillComparison {
 }
 export interface SkillDocument { id: string; sourceId: string; relativePath: string; text: string; readAt: string }
 
-export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire' | 'project.verify' | 'set.save' | 'set.remove';
+export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire' | 'project.verify' | 'set.save' | 'set.remove' | 'skill.setaside' | 'skill.restore' | 'project.adopt';
 export interface Change { kind: ChangeKind; args?: Record<string, unknown> }
 export interface ChangeLine { tone: 'add' | 'remove' | 'change' | 'note' | 'warn'; text: string }
 export interface ChangePreview { kind: ChangeKind; title: string; lines: ChangeLine[]; conflicts: string[]; ok: boolean; args?: Record<string, unknown> }

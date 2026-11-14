@@ -3,7 +3,7 @@ import { groupAttention, groupHealth, groupRows, matchesProjectFilter, matchesPr
 import type { Feeds, ProjectReport, TargetReport } from './store';
 
 const target = (id: string, feeds: Feeds, over: Partial<TargetReport> = {}): TargetReport => ({
-  id, dir: `.${id}`, doc: 'X.md', docExists: true, optIn: false, copy: null, verification: null, kind: 'link', health: 'link',
+  id, dir: `.${id}`, doc: 'X.md', docExists: true, optIn: false, copy: null, adoptable: null, verification: null, kind: 'link', health: 'link',
   resolvedTarget: null, feeds, set: null, entries: null, match: 'matches', ...over,
 });
 const verified = (stale = false) => ({ level: 'verified' as const, tool: 't', detail: '', at: '2026-11-12T10:00:00.000Z', stale });

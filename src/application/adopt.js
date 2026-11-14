@@ -15,6 +15,23 @@ const { MARKER, markerPath, fingerprint, readMarker } = require('../deployment/c
 
 const key = (name) => (IS_WIN ? name.toLowerCase() : name);
 
+/**
+ * Read-only and cheap (no digests). Sorts what is in a skills folder into the owner's own skills, skills that
+ * share a name with a library skill (the owner's stays), and other entries; and lists the library skills the
+ * folder lacks. The dashboard catalogue uses it too, so a page and a plan can never disagree about a folder.
+ */
+function classifyFolder({ folder, entries, libraryNames }) {
+  const inLibrary = new Set(libraryNames.map(key));
+  const present = new Set(entries.map(key));
+  const own = [], shared = [];
+  let others = 0;
+  for (const entry of [...entries].sort()) {
+    if (!fs.existsSync(path.join(folder, entry, 'SKILL.md'))) { others++; continue; }
+    (inLibrary.has(key(entry)) ? shared : own).push(entry);
+  }
+  return { own, shared, others, incoming: libraryNames.filter((n) => !present.has(key(n))) };
+}
+
 /** Read-only. Returns { ok, conflicts, own, shared, incoming, others, actions, notes }. */
 function planAdopt({ projectRoot, target, libraryRoot }) {
   const root = path.resolve(projectRoot);
@@ -30,13 +47,8 @@ function planAdopt({ projectRoot, target, libraryRoot }) {
   if (readMarker(dotDir)) { out.conflicts.push(`${target.dir}/skills is already managed here. Use Refresh copy to bring it up to date.`); return out; }
 
   const fp = fingerprint(libraryRoot);
-  const inLibrary = new Set(fp.names.map(key));
-  const present = new Set(dest.entries.map(key));
-  for (const entry of [...dest.entries].sort()) {
-    if (!fs.existsSync(path.join(folder, entry, 'SKILL.md'))) { out.others++; continue; }
-    (inLibrary.has(key(entry)) ? out.shared : out.own).push(entry);
-  }
-  out.incoming = fp.names.filter((n) => !present.has(key(n)));
+  const found = classifyFolder({ folder, entries: dest.entries, libraryNames: fp.names });
+  Object.assign(out, { own: found.own, shared: found.shared, incoming: found.incoming, others: found.others });
 
   out.actions.push({
     kind: 'copy-entries', destination: folder, source: libraryRoot, entries: out.incoming, kept: dest.entries.length,
@@ -50,4 +62,4 @@ function planAdopt({ projectRoot, target, libraryRoot }) {
   return out;
 }
 
-module.exports = { planAdopt };
+module.exports = { planAdopt, classifyFolder };

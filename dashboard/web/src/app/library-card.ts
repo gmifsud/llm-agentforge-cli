@@ -2,13 +2,14 @@ import { Component, computed, inject, input } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { Store, type Collision, type SkillView } from './store';
 import { sourceLabel } from './source-status';
+import { SetAsideList } from './set-aside-list';
 
 /**
  * The library and its same-name clashes: how many skills your agents can use, whether the library on disk is current,
  * what fits the listing budget, and which clashes need a look. Shown on the Fleet page, and on the map with `sockets`,
  * where cables plug into the library card.
  */
-@Component({ selector: 'af-library-card', imports: [RouterLink], template: `
+@Component({ selector: 'af-library-card', imports: [RouterLink, SetAsideList], template: `
   @if (s.catalog(); as c) {
     <article class="module library" aria-label="Library">
       @if (sockets()) { <span class="jack in" data-jack="lib-in"></span> }
@@ -58,9 +59,10 @@ import { sourceLabel } from './source-status';
         }
         @if (h.shadows.length) {
           <p class="health-line"><span class="state caution">{{ h.shadows.length }} personal {{ h.shadows.length === 1 ? 'skill hides' : 'skills hide' }} a library skill of the same name</span>
-            <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show</button></p>
+            <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show and set aside</button></p>
         }
       }
+      <af-set-aside />
 
       @if (c.sets.length) {
         <p class="health-line"><span class="state live">Sets: {{ c.sets.length }} · {{ setStats().onSets }} {{ setStats().onSets === 1 ? 'agent reads' : 'agents read' }} a set · {{ setStats().onLibrary }} read the whole library</span>

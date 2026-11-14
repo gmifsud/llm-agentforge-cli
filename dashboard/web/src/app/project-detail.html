@@ -18,6 +18,7 @@
           @else { <span class="agent-doc">Linked. Not checked with the tool yet</span> }
           <span class="agent-doc">{{ invoke[t.id] }}</span>
         }
+        @if (plannedAdopt(t.id)) { <span class="agent-doc planned-note">Will be adopted when you apply</span> }
         @if (t.feeds !== 'none' || t.docExists) { <span class="agent-doc">{{ t.doc }} {{ t.docExists ? 'present' : 'missing' }}</span> }
         @if (!plannedFor(t.id)) {
           @if (needsRepoint(t)) {
@@ -33,11 +34,30 @@
             <button type="button" class="quiet tiny" (click)="s.verify(report().project.id, t)" [disabled]="s.applying()"
                     [attr.aria-label]="'Verify ' + agents[t.id] + ' in ' + report().project.name">Verify</button>
           }
+          @if (t.adoptable && !plannedAdopt(t.id)) {
+            <button type="button" class="quiet tiny" (click)="adopting.set(t.id)" [disabled]="s.applying()"
+                    [attr.aria-label]="'Adopt the skills folder of ' + agents[t.id] + ' in ' + report().project.name">Adopt</button>
+          }
         }
       </li>
     }
   </ul>
   @if (shown().length && unwired()) { <p class="fine">Not wired: {{ unwired() }}</p> }
+  @if (adoptingTarget(); as t) {
+    <div class="choosebox" role="group" [attr.aria-label]="'Adopt the ' + agents[t.id] + ' skills folder'">
+      <h3>Adopt the {{ agents[t.id] }} skills folder</h3>
+      <p>{{ t.dir }}/skills holds skills of your own. Adopting lets Agentforge add the library's skills beside them and keep them up to date.</p>
+      @if (t.adoptable!.own.length) { <p class="fine">Yours, kept as they are: {{ t.adoptable!.own.join(', ') }}</p> }
+      <div class="preview"><b>If you adopt it:</b>
+        <p class="fine">{{ adoptSummary(t.adoptable!) }}</p>
+        @if (t.adoptable!.incoming) { <p class="fine">Git will show the added folders as untracked files until you commit or ignore them. Your own skills are never hidden from git, and nothing of yours is moved, replaced or deleted.</p> }
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" (click)="applyAdopt()" [disabled]="s.applying()">Review this change</button>
+        <button type="button" class="quiet" (click)="adopting.set('')">Cancel</button>
+      </div>
+    </div>
+  }
   @if (choosable().length && !choosingTarget()) {
     <div class="actions">
       @for (t of choosable(); track t.id) {

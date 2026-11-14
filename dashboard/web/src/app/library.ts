@@ -1,11 +1,13 @@
 import { Component, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { Store, type SkillView } from './store';
+import { Store, type Shadow, type SkillView } from './store';
+import { differenceText } from './skill-actions';
+import { SetAsideList } from './set-aside-list';
 
 const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
 
-@Component({ selector: 'af-library', imports: [DatePipe, RouterLink], template: `
+@Component({ selector: 'af-library', imports: [DatePipe, RouterLink, SetAsideList], template: `
   <header class="page-head">
     <h1>Skill library</h1>
     <p>Every skill found in your vault and attached repositories, and why each one is or is not what your agents get.</p>
@@ -81,7 +83,20 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
                   <li [class]="f.severity"><strong>{{ tools(f.tools) }}:</strong> {{ plain(f.message, skill.name) }}</li>
                 }
                 @for (sh of s.shadowsFor(skill.id); track sh.path) {
-                  <li class="warn"><strong>{{ toolName(sh.tool) }}:</strong> your own skill at <span class="path">{{ sh.path }}</span> has the same name and is used instead of this one.</li>
+                  <li class="warn">
+                    <strong>{{ toolName(sh.tool) }}:</strong> your own skill has the same name and is used instead of this one.
+                    <dl class="shadow-paths">
+                      <dt>Yours</dt><dd class="path">{{ sh.path }}</dd>
+                      @if (sh.libraryPath) { <dt>Library</dt><dd class="path">{{ sh.libraryPath }}</dd> }
+                    </dl>
+                    <p class="fine">{{ difference(sh) }}</p>
+                    @if (plannedAside(sh)) { <span class="planned-note">Will be set aside when you apply</span> }
+                    @else {
+                      <button type="button" class="quiet tiny" (click)="s.setAside(sh.tool, sh.name)" [disabled]="s.applying()"
+                              [attr.aria-label]="'Set aside your ' + sh.name + ' for ' + toolName(sh.tool)">Set aside my copy</button>
+                      <span class="fine">Moves it whole to ~/.agentforge/set-aside. Nothing is deleted, and Restore puts it back.</span>
+                    }
+                  </li>
                 }
               </ul>
             </section>
@@ -97,6 +112,7 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
         }
       </aside>
     </div>
+    <af-set-aside />
   }
 ` })
 export class Library {
@@ -108,6 +124,8 @@ export class Library {
   slash(p: string) { return p.split('\\').join('/'); }
   problemCount() { const h = this.s.catalog()?.health; return h ? new Set([...h.findings.filter(f => f.severity !== 'info').map(f => f.skillId), ...h.shadows.map(x => x.skillId)]).size : 0; }
   toolName(t: string) { return TOOL[t] || t; }
+  difference = differenceText;
+  plannedAside(sh: Shadow) { return this.s.pendingFor('skill.setaside', a => a['tool'] === sh.tool && a['name'] === sh.name).length > 0; }
   tools(list: string[]) { return list.map(t => this.toolName(t)).join(', '); }
   /** The message starts with the folder name, which the heading already shows. */
   plain(message: string, name: string) { const text = message.replace(new RegExp(`^[^:]*: `), ''); return text.charAt(0).toUpperCase() + text.slice(1); }

@@ -19,7 +19,9 @@ const { digestSkill } = require('../../src/discovery/skill-digest');
 const { lockFile, readLock, snapshot, diffLock } = require('../../src/application/lock');
 const setsApp = require('../../src/application/sets');
 const { diffLines } = require('../../src/discovery/text-diff');
-const { copyState } = require('../../src/deployment/copy-state');
+const { copyState, readMarker } = require('../../src/deployment/copy-state');
+const { listSetAside } = require('../../src/application/set-aside');
+const { classifyFolder } = require('../../src/application/adopt');
 
 const COMPARE_LIMITS = Object.freeze({ maxFiles: 500, maxBytes: 5 * 1024 * 1024 });
 const RUNS_CODE = /\.(sh|bash|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|exe)$/i;
@@ -27,6 +29,13 @@ const RUNS_CODE = /\.(sh|bash|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|exe)$/i;
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 const nameKey = (name) => process.platform === 'win32' ? name.toLowerCase() : name;
 const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+
+/** What the page needs to compare two copies of a skill: its description, how many files it ships, and its content digest. */
+function sideOf(dir) {
+  let description = '', files = null, digest = null;
+  try { localPath(dir); description = lintSkill(dir).description || ''; const d = digestSkill(dir, COMPARE_LIMITS); digest = d.digest; files = d.files.length; } catch { /* unreadable or too large: reported as unknown */ }
+  return { description, files, digest };
+}
 
 /** Check link targets BEFORE realpath/stat can follow a link into a UNC/WSL share. */
 function localPath(input, depth = 0, memo = new Map()) {
@@ -148,6 +157,7 @@ class ReadService {
     this.config = {};
     this.catalog = null;
     this.documents = new Map();
+    this.libraryNames = null;   // the skills the built library holds, for telling an adoptable folder; set by refresh()
     this.stale = true;
     // Fill the list now; a corrupt projects.json is reported by context() on the first read instead.
     try { this.loadProjects(); } catch {
@@ -309,7 +319,13 @@ class ReadService {
       health = {
         findings, counts,
         budget: estimateListing(linted, { budgetChars: this.config.listingBudgetChars, contextTokens: this.config.contextTokens }),
-        shadows: findShadows(linted.map(l => l.name), personalLevels(this.paths.homedir)).map(s => ({ ...s, skillId: linted.find(l => l.name === s.name)?.id || null })),
+        shadows: findShadows(linted.map(l => l.name), personalLevels(this.paths.homedir)).map(s => {
+          const skillId = linted.find(l => l.name === s.name)?.id || null;
+          const libraryPath = skillId ? documents.get(skillId)?.directory || null : null;
+          const mine = sideOf(s.path), lib = libraryPath ? sideOf(libraryPath) : null;
+          return { ...s, skillId, libraryPath, same: mine.digest && lib?.digest ? mine.digest === lib.digest : null,
+            personalDescription: mine.description, libraryDescription: lib ? lib.description : '', personalFiles: mine.files, libraryFiles: lib ? lib.files : null };
+        }),
       };
       contained(this.paths.homedir, this.paths.mergedSkills);
       library = { path: this.paths.mergedSkills, ...diffLibrary(this.paths.mergedSkills, view.entries) };
@@ -334,6 +350,15 @@ class ReadService {
       const doc = setsApp.loadSets(this.paths);
       storedSets = Object.keys(doc.sets).sort().map(name => ({ name, rules: doc.sets[name].rules, built: fs.existsSync(setsApp.setView(this.paths, name)) }));
     } catch (e) { warnings.push(e && e.message ? e.message : 'The skill sets could not be read.'); }
+    // What has been set aside from the personal folders, and whether each can go back now.
+    let setAside = [];
+    try { contained(this.paths.homedir, this.paths.setAsideDir); setAside = listSetAside(this.paths); }
+    catch (e) { warnings.push(e && e.message ? e.message : 'The set-aside skills could not be read.'); }
+    // The names the built library holds (cheap: no digests), so a project's own skills folder can be sorted without a scan per project.
+    this.libraryNames = null;
+    if (library.built && !library.invalid) {
+      try { this.libraryNames = fs.readdirSync(this.paths.mergedSkills).filter(n => fs.existsSync(path.join(this.paths.mergedSkills, n, 'SKILL.md'))); } catch { /* adoption is then not offered */ }
+    }
     // The library is the same for every project, so it is scanned once per read. The map lives only for this read.
     const libraryScan = new Map();
     const projects = this.projects.map(p => {
@@ -342,7 +367,7 @@ class ReadService {
     });
     const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
       status: sources.some(s => s.state !== 'available') || rejected.length ? 'partial' : 'complete',
-      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder, sinceLastBuild, sets: storedSets,
+      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder, sinceLastBuild, sets: storedSets, setAside,
       sourceOrderExplicit: Array.isArray(this.config.sourcePriority) && this.config.sourcePriority.length > 0 };
     this.documents = documents; this.catalog = catalog; this.stale = false;
     return catalog;
@@ -454,10 +479,16 @@ class ReadService {
       // A copy made by Agentforge knows what it was copied from, so it can be told fresh from stale against the library.
       let copy = null;
       if (t.link.kind === 'directory') { try { const c = copyState(path.join(project.path, t.dir), library); copy = c.managed ? { state: c.state, copiedAt: c.copiedAt || null } : null; } catch { copy = null; } }
+      // A folder of the owner's own skills that nothing here manages can be adopted: the library's missing skills are copied in beside them.
+      let adoptable = null;
+      if (t.link.kind === 'directory' && this.libraryNames && !readMarker(path.join(project.path, t.dir))) {
+        const c = classifyFolder({ folder: path.join(project.path, t.dir, 'skills'), entries: t.link.entries, libraryNames: this.libraryNames });
+        adoptable = { own: c.own, shared: c.shared, incoming: c.incoming.length, others: c.others };
+      }
       // What the tool itself last reported, and whether the folder has changed since.
       const stored = verificationFor(verifications, project.path, t.id);
       const verification = stored ? { level: stored.level, tool: stored.tool, detail: stored.detail, at: stored.at, stale: stored.basis !== skillsBasis(path.join(project.path, t.dir)) } : null;
-      return { id: t.id, dir: t.dir, doc: t.doc, docExists, optIn: Boolean(t.optIn), copy, verification,
+      return { id: t.id, dir: t.dir, doc: t.doc, docExists, optIn: Boolean(t.optIn), copy, adoptable, verification,
         kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null, feeds, set: setName,
         entries: t.link.kind === 'directory' ? t.link.entries.length : null,
         match: t.link.kind === 'link' && !t.link.broken && readable && libraryState === 'available'

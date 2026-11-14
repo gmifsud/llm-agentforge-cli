@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router';
 import { AGENTS, Store, type ProjectReport, type TargetReport } from './store';
 import { fitBudget, libraryEntries, resolveRules } from './set-rules';
 import { DEFAULT_BUDGET_CHARS } from './sets';
+import { adoptSummary } from './skill-actions';
 import { INVOKE, agentState, isVerified, isWorking, needsCopy, needsRepoint, staleCopy, unwiredNames, verifiedLine } from './agent-status';
 
 /**
@@ -29,6 +30,17 @@ export class ProjectDetail {
   /** Agents worth a row: anything wired, broken, copied or about to be wired. */
   shown = computed(() => this.report().targets.filter(t => t.feeds !== 'none' || this.plannedFor(t.id)));
   unwired = computed(() => unwiredNames(this.report(), t => this.plannedFor(t)));
+
+  /** Adopting a folder of your own skills: which agent's folder is being looked at, before it is queued. */
+  adopting = signal('');
+  adoptingTarget = computed(() => this.report().targets.find(t => t.id === this.adopting() && t.adoptable) ?? null);
+  adoptSummary = adoptSummary;
+  plannedAdopt(target: string) { return this.s.pendingFor('project.adopt', a => a['projectId'] === this.id() && a['target'] === target).length > 0; }
+  applyAdopt() {
+    const t = this.adoptingTarget(); if (!t) return;
+    this.s.adopt(this.id(), t);
+    this.adopting.set('');
+  }
 
   wiring = signal(false);
   wireTargets = signal<Set<string>>(new Set());
@@ -68,7 +80,7 @@ export class ProjectDetail {
 
   constructor() {
     // Choosing another project closes a half-filled wire form; a refresh of the same project does not.
-    effect(() => { this.id(); untracked(() => { this.wiring.set(false); this.choosing.set(''); }); });
+    effect(() => { this.id(); untracked(() => { this.wiring.set(false); this.choosing.set(''); this.adopting.set(''); }); });
   }
 
   plannedFor(target: string) {
