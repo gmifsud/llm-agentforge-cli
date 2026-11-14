@@ -16,6 +16,8 @@ const { loadSavedProjects, projectsFile, diffLibrary, loadVerifications, verific
 const { lintSkill, parseFrontmatter, findShadows, personalLevels } = require('../../src/discovery/skill-lint');
 const { estimateListing } = require('../../src/discovery/listing-budget');
 const { digestSkill } = require('../../src/discovery/skill-digest');
+const { lockFile, readLock, snapshot, diffLock } = require('../../src/application/lock');
+const setsApp = require('../../src/application/sets');
 const { diffLines } = require('../../src/discovery/text-diff');
 const { copyState } = require('../../src/deployment/copy-state');
 
@@ -252,7 +254,7 @@ class ReadService {
       }
       if (skills.length > LIMITS.candidates) throw new ReadError(ERROR.LIMIT, `Catalogue exceeds ${LIMITS.candidates} candidates.`);
     }
-    let winnerIds = [], collisions = [], library = null, health = null, sourceOrder = [];
+    let winnerIds = [], collisions = [], library = null, health = null, sourceOrder = [], sinceLastBuild = null;
     const preferences = this.config.preferences && typeof this.config.preferences === 'object' ? this.config.preferences : {};
     // A missing source cannot be treated as an intentionally empty contribution.
     const mergeAvailable = sources.every(s => s.state === 'available');
@@ -298,6 +300,9 @@ class ReadService {
       sourceOrder = [...new Set(view.order.flatMap(k => (k === 'vault' ? sources.filter(s => s.key === 'vault') : [byName(k)]).filter(Boolean).map(s => s.id)))];
       // Can the skills the library will hold actually be invoked? Rules, listing budget, personal skills that hide them.
       const linted = winnerIds.map(id => ({ id, ...lintSkill(documents.get(id).directory) }));
+      // What the set editor needs about each skill in the library: its own category, and how long its description is.
+      const byId = new Map(skills.map(s => [s.id, s]));
+      for (const l of linted) { const sk = byId.get(l.id); if (sk) { sk.category = l.category || ''; sk.descriptionChars = (l.description || '').length; } }
       const findings = linted.flatMap(l => l.findings.map(f => ({ skillId: l.id, skill: l.name, ...f })));
       const counts = { error: 0, warn: 0, info: 0 };
       for (const f of findings) counts[f.severity]++;
@@ -308,6 +313,13 @@ class ReadService {
       };
       contained(this.paths.homedir, this.paths.mergedSkills);
       library = { path: this.paths.mergedSkills, ...diffLibrary(this.paths.mergedSkills, view.entries) };
+      // What changed in the sources since the last build. The record is only compared with; what the library should hold comes from disk.
+      contained(this.paths.homedir, lockFile(this.paths));
+      const record = readLock(this.paths);
+      if (record) {
+        const now = snapshot(view.entries, name => (name === 'vault' ? null : sources.find(s => s.kind !== 'primary' && s.name === name)?.revision ?? null));
+        sinceLastBuild = { builtAt: record.builtAt, ...diffLock(record, now) };
+      }
     } else warnings.push('Merge preview unavailable: one or more source folders could not be inspected.');
     if (!library) {
       contained(this.paths.homedir, this.paths.mergedSkills);
@@ -315,6 +327,13 @@ class ReadService {
       library = { path: this.paths.mergedSkills, built: d.built, builtAt: d.builtAt, invalid: d.invalid, size: d.size, add: [], remove: [], change: [], inSync: null };
     }
     skills.sort((a, b) => compare(a.name, b.name) || compare(a.sourceId, b.sourceId) || compare(a.relativePath, b.relativePath));
+    // The stored sets. A damaged file is reported and treated as none, so it cannot break the whole catalogue.
+    let storedSets = [];
+    try {
+      contained(this.paths.homedir, setsApp.setsFile(this.paths));
+      const doc = setsApp.loadSets(this.paths);
+      storedSets = Object.keys(doc.sets).sort().map(name => ({ name, rules: doc.sets[name].rules, built: fs.existsSync(setsApp.setView(this.paths, name)) }));
+    } catch (e) { warnings.push(e && e.message ? e.message : 'The skill sets could not be read.'); }
     // The library is the same for every project, so it is scanned once per read. The map lives only for this read.
     const libraryScan = new Map();
     const projects = this.projects.map(p => {
@@ -323,7 +342,7 @@ class ReadService {
     });
     const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
       status: sources.some(s => s.state !== 'available') || rejected.length ? 'partial' : 'complete',
-      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder,
+      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder, sinceLastBuild, sets: storedSets,
       sourceOrderExplicit: Array.isArray(this.config.sourcePriority) && this.config.sourcePriority.length > 0 };
     this.documents = documents; this.catalog = catalog; this.stale = false;
     return catalog;
@@ -421,15 +440,17 @@ class ReadService {
       const readable = t.link.kind === 'directory' || (t.link.kind === 'link' && !t.link.broken)
         ? availability(path.join(project.path, t.dir, 'skills')) === 'available' : true;
       // What a working link feeds the agent: the library (all sources), the vault alone, or something else.
-      let feeds = 'none';
+      let feeds = 'none', setName = null;
       if (t.link.kind === 'link' && t.link.broken) feeds = 'broken';
       else if (t.link.kind === 'link' && readable) {
-        feeds = samePath(t.link.resolvedTarget, library) ? 'library' : samePath(t.link.resolvedTarget, primaryRoot) ? 'vault' : 'elsewhere';
+        const reads = setsApp.readsOf(this.paths, t.link.resolvedTarget);
+        if (reads.kind === 'set') setName = reads.name;
+        feeds = samePath(t.link.resolvedTarget, library) ? 'library' : samePath(t.link.resolvedTarget, primaryRoot) ? 'vault' : setName ? 'set' : 'elsewhere';
       } else if (t.link.kind === 'directory') feeds = 'copy';
       else if (t.link.kind === 'file') feeds = 'blocked';
       else if (!readable) feeds = 'unreadable';
       // A healthy link is no use to a tool that ignores links (measured: Antigravity).
-      if (t.needsCopy && (feeds === 'library' || feeds === 'vault' || feeds === 'elsewhere')) feeds = 'needs-copy';
+      if (t.needsCopy && (feeds === 'library' || feeds === 'vault' || feeds === 'elsewhere' || feeds === 'set')) feeds = 'needs-copy';
       // A copy made by Agentforge knows what it was copied from, so it can be told fresh from stale against the library.
       let copy = null;
       if (t.link.kind === 'directory') { try { const c = copyState(path.join(project.path, t.dir), library); copy = c.managed ? { state: c.state, copiedAt: c.copiedAt || null } : null; } catch { copy = null; } }
@@ -437,7 +458,7 @@ class ReadService {
       const stored = verificationFor(verifications, project.path, t.id);
       const verification = stored ? { level: stored.level, tool: stored.tool, detail: stored.detail, at: stored.at, stale: stored.basis !== skillsBasis(path.join(project.path, t.dir)) } : null;
       return { id: t.id, dir: t.dir, doc: t.doc, docExists, optIn: Boolean(t.optIn), copy, verification,
-        kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null, feeds,
+        kind: t.link.kind, health: readable ? t.linkHealth : 'unreadable', resolvedTarget: t.link.resolvedTarget || null, feeds, set: setName,
         entries: t.link.kind === 'directory' ? t.link.entries.length : null,
         match: t.link.kind === 'link' && !t.link.broken && readable && libraryState === 'available'
           ? (samePath(t.link.resolvedTarget, deployment.root) ? 'matches' : 'differs') : 'unknown' };

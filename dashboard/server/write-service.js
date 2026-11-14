@@ -14,12 +14,15 @@ const { TARGETS } = require('../../src/domain/targets');
 const { AgentforgeError } = require('../../src/domain/errors');
 const { addSource, removeSource, fetchSources, cacheRootFor, sourceRootFor } = require('../../src/application/sources');
 const { syncView } = require('../../src/application/sync');
+const { readLock, revisionLookup, snapshot, diffLock } = require('../../src/application/lock');
+const setsApp = require('../../src/application/sets');
+const { validateSetName, normaliseSet, resolveSet } = require('../../src/domain/sets');
 const { buildVars, planProject } = require('../../src/application/project');
 const { applyPlan } = require('../../src/deployment/apply');
 const { computeView } = require('../../src/deployment/build-view');
 const { discoverSkills } = require('../../src/discovery/discover-skills');
 const { createGit } = require('../../src/infra/git');
-const { samePath, inspectDestination } = require('../../src/infra/fs-inspect');
+const { samePath, isWithinLexical, inspectDestination } = require('../../src/infra/fs-inspect');
 const { localPath, contained } = require('./read-service');
 const { ReadError, ERROR } = require('./constants');
 const { nameKey, loadSavedProjects, saveSavedProjects, saveConfig, diffLibrary, saveVerification, skillsBasis } = require('./workspace');
@@ -29,7 +32,7 @@ const { createHash } = require('node:crypto');
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 /** Steps whose failure never cancels the others: updating one source, or asking one tool. */
 const INDEPENDENT = new Set(['source.fetch', 'project.verify']);
-const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify'];
+const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -122,6 +125,7 @@ class WriteService {
       if (st.kind === 'missing') conflicts.push(`${resolved} does not exist.`);
       else if (st.kind === 'file') conflicts.push(`${resolved} is a file, not a folder.`);
       if (samePath(resolved, this.paths.mergedSkills)) conflicts.push('That folder is the library itself; it cannot also be a source.');
+      if (isWithinLexical(this.paths.viewsDir, resolved)) conflicts.push('That folder is a skill set, built from the library; it cannot also be a source.');
       if (samePath(resolved, this.primary())) conflicts.push('That folder is your vault; it is already the primary source.');
     }
     const name = str(args.name, 'Name', { optional: true, max: 64 }) || deriveSourceId(location);
@@ -255,12 +259,61 @@ class WriteService {
       if (d.remove.length) lines.push({ tone: 'remove', text: `Remove ${plural(d.remove.length, 'skill')}: ${list(d.remove)}` });
       if (d.inSync) lines.push({ tone: 'note', text: `Already up to date with ${plural(view.entries.length, 'skill')}` });
     }
+    // The library is links, so a source file can change a skill without any link changing. The record of the last build says which.
+    const since = diffLock(readLock(this.paths), snapshot(view.entries, revisionLookup({ repos, git: this.git, rootFor: r => sourceRootFor(this.paths, r) })));
+    if (since.changed.length) lines.push({ tone: 'change', text: `Content changed since the last build in ${plural(since.changed.length, 'skill')}: ${list(since.changed)}` });
     lines.push({ tone: 'note', text: 'Projects wired to the library see the result immediately.' });
     return { title: 'Rebuild the library', lines, conflicts, ok: conflicts.length === 0, args: {},
       run: () => {
         const res = syncView({ paths: this.paths, env: this.env, cliVault: this.vault, fetch: false, git: this.git });
         return { lines: [{ tone: 'add', text: `Library rebuilt with ${plural(res.linked, 'skill')}` }] };
       } };
+  }
+
+  // ─── sets ─────────────────────────────────────────────────────────────────
+  /** Create a set, or replace the rules of one. The set is built at once, from the library's winners. */
+  set_save(args) {
+    const name = validateSetName(str(args.name, 'Set', { max: 64 }));
+    const rules = normaliseSet({ rules: Array.isArray(args.rules) ? args.rules : [] }).rules;
+    const replace = args.replace === true;
+    const config = this.config();
+    const exists = Boolean(setsApp.loadSets(this.paths).sets[name]);
+    const lines = [], conflicts = [];
+    if (exists && !replace) conflicts.push(`A set called "${name}" already exists.`);
+    if (!rules.some(r => !r.exclude)) conflicts.push('Add at least one rule that includes skills.');
+    const resolved = resolveSet({ rules }, setsApp.describeEntries(this.view(config).entries));
+    for (const r of resolved.unmatched) conflicts.push(`The rule ${r.type}:${r.value} selects no skill.`);
+    const count = resolved.entries.length;
+    const budget = setsApp.setBudget(resolved.entries, { budgetChars: config.listingBudgetChars, contextTokens: config.contextTokens });
+    lines.push({ tone: exists ? 'change' : 'add', text: exists ? `Replace the rules of the set "${name}": it will hold ${plural(count, 'skill')}` : `Create the set "${name}" with ${plural(count, 'skill')}` });
+    lines.push(budget.fits
+      ? { tone: 'note', text: 'Every description fits, so an agent can pick any of these skills on its own.' }
+      : { tone: 'warn', text: `About ${budget.kept} of ${budget.entries} descriptions fit. The rest can still be called by name, but agents will not pick them on their own.` });
+    lines.push({ tone: 'note', text: `Builds a folder of links at ${setsApp.setView(this.paths, name)}. No skill is copied or edited.` });
+    if (exists) {
+      const readers = setsApp.agentsReading({ paths: this.paths, name, projects: this.projects().map(p => p.path) });
+      if (readers.length) lines.push({ tone: 'note', text: `${plural(readers.length, 'agent')} read it and will see the new list at once.` });
+    }
+    return { title: exists ? `Update the set ${name}` : `Create the set ${name}`, lines, conflicts, ok: conflicts.length === 0, args: { name, rules, replace },
+      run: () => {
+        const made = setsApp.createSet({ paths: this.paths, name, rules, entries: this.view().entries, force: replace });
+        return { lines: [{ tone: 'add', text: `Set "${name}" built with ${plural(made.linked, 'skill')}` }] };
+      } };
+  }
+
+  /** Remove a set and its folder of links. Refused while an agent reads it. */
+  set_remove(args) {
+    const name = str(args.name, 'Set', { max: 64 });
+    const exists = Boolean(setsApp.loadSets(this.paths).sets[name]);
+    const conflicts = [];
+    const lines = [{ tone: 'remove', text: `Remove the set "${name}" and its folder of links` }, { tone: 'note', text: 'The skills themselves are not touched.' }];
+    if (!exists) conflicts.push(`No set called "${name}".`);
+    else {
+      const readers = setsApp.agentsReading({ paths: this.paths, name, projects: this.projects().map(p => p.path) });
+      if (readers.length) conflicts.push(`The set "${name}" is read by ${plural(readers.length, 'agent')}: ${list(readers.map(r => `${path.basename(r.project)} (${r.target})`))}. Point them elsewhere first.`);
+    }
+    return { title: `Remove the set ${name}`, lines, conflicts, ok: conflicts.length === 0, args: { name },
+      run: () => { setsApp.removeSet({ paths: this.paths, name, projects: this.projects().map(p => p.path) }); } };
   }
 
   // ─── projects ──────────────────────────────────────────────────────────────
@@ -324,11 +377,15 @@ class WriteService {
     if (!LINK_TYPES.includes(link)) throw bad('Unknown link type.');
     const writeDocs = args.writeDocs !== false;
     const repoint = args.repoint === true;
-    const library = this.paths.mergedSkills;
+    // The folder the agent is linked to: the library, or one set's folder of links.
+    const setName = args.set === undefined || args.set === null ? null : str(args.set, 'Set', { max: 64 });
+    const library = setName ? setsApp.setView(this.paths, setName) : this.paths.mergedSkills;
+    const label = setName ? `the set ${setName}` : 'the library';
     const lines = [], conflicts = [];
     const libState = inspectDestination(library);
     const libraryReady = libState.kind === 'directory';
-    if (!libraryReady) conflicts.push('The library has not been built yet. Rebuild the library first.');
+    if (setName && !setsApp.loadSets(this.paths).sets[setName]) conflicts.push(`No set called "${setName}".`);
+    else if (!libraryReady) conflicts.push(setName ? `The set "${setName}" has not been built yet.` : 'The library has not been built yet. Rebuild the library first.');
     // One call for all chosen agents: the core writes a shared instruction file once and plans a shared
     // folder once (as a copy when any agent sharing it cannot follow links).
     const chosen = libraryReady ? planProject({
@@ -337,12 +394,18 @@ class WriteService {
     }) : [];
     for (const plan of chosen) {
       const t = TARGETS[plan.target];
-      for (const a of plan.actions) lines.push(describeAction(a, p.path, library, this.primary()));
-      for (const n of plan.notes) lines.push({ tone: 'note', text: `${t.id}: ${humanNote(n)}` });
+      for (const a of plan.actions) lines.push(describeAction(a, p.path, library, this.primary(), label));
+      for (const n of plan.notes) lines.push({ tone: 'note', text: `${t.id}: ${humanNote(n, label)}` });
       for (const c of plan.conflicts) conflicts.push(`${t.id}: ${humanConflict(c, repoint)}`);
     }
+    if (setName && libraryReady && lines.some(l => l.tone !== 'note')) {
+      // A set holds fewer skills, so say plainly what the agent will not have: not even by name.
+      const total = this.view().entries.length, inSet = fs.readdirSync(library).length;
+      const who = targets.map(t => TOOL_NAMES[t] || t).join(' and ');
+      lines.push({ tone: 'warn', text: `${who} will see ${plural(inSet, 'skill')}.${total > inSet ? ` The other ${total - inSet} are not available in this project at all, not even by name.` : ''}` });
+    }
     if (libraryReady && !lines.some(l => l.tone !== 'note')) lines.push({ tone: 'note', text: 'Already wired. Nothing to change.' });
-    return { title: `Wire ${p.name}`, lines, conflicts, ok: conflicts.length === 0, args: { projectId: p.id, targets, link, writeDocs, repoint },
+    return { title: `Wire ${p.name}`, lines, conflicts, ok: conflicts.length === 0, args: { projectId: p.id, targets, link, writeDocs, repoint, ...(setName ? { set: setName } : {}) },
       // apply() was called with a plan built moments ago by describe(); applyPlan re-checks every precondition.
       run: () => {
         for (const plan of chosen) applyPlan(plan);
@@ -366,19 +429,19 @@ const RELOAD = {
 };
 
 function rel(projectRoot, p) { const r = path.relative(projectRoot, p); return r && !r.startsWith('..') ? r.split(path.sep).join('/') : p; }
-function where(target, library, vault) {
-  if (samePath(target, library)) return 'the library';
+function where(target, library, vault, label = 'the library') {
+  if (samePath(target, library)) return label;
   if (vault && samePath(target, vault)) return 'your vault';
   return target;
 }
-function describeAction(a, root, library, vault) {
+function describeAction(a, root, library, vault, label = 'the library') {
   const d = rel(root, a.destination);
   switch (a.kind) {
     case 'write-file': return { tone: 'add', text: `Write ${d}` };
     case 'mkdir': return { tone: 'add', text: `Create the folder ${d}` };
-    case 'create-link': return { tone: 'add', text: `Link ${d} to ${where(a.source, library, vault)}` };
-    case 'copy-directory': return { tone: 'add', text: `Copy ${where(a.source, library, vault)} into ${d}` };
-    case 'refresh-copy': return { tone: 'change', text: `Refresh the copy in ${d} from ${where(a.source, library, vault)}. Skills you added there are kept.` };
+    case 'create-link': return { tone: 'add', text: `Link ${d} to ${where(a.source, library, vault, label)}` };
+    case 'copy-directory': return { tone: 'add', text: `Copy ${where(a.source, library, vault, label)} into ${d}` };
+    case 'refresh-copy': return { tone: 'change', text: `Refresh the copy in ${d} from ${where(a.source, library, vault, label)}. Skills you added there are kept.` };
     case 'copy-entries': return { tone: 'add', text: `Copy ${plural(a.entries.length, 'missing skill')} into ${d}, keeping the ${a.kept} already there` };
     case 'remove-link': return { tone: 'remove', text: `Unlink ${d} from ${a.expectedTarget}. That folder is not touched.` };
     case 'remove-directory': return { tone: 'remove', text: `Delete the folder ${d}` };
@@ -386,9 +449,9 @@ function describeAction(a, root, library, vault) {
     default: return { tone: 'note', text: `${a.kind} ${d}` };
   }
 }
-function humanNote(n) {
+function humanNote(n, label = 'the library') {
   return n.replace(/ — skipping \(use --force to overwrite\)/, ' is kept as it is')
-    .replace(/already links to .*/, 'already linked to the library')
+    .replace(/already links to .*/, `already linked to ${label}`)
     .replace(/: preserved (\d+) existing entries; nothing to merge/, ' keeps its $1 skills; nothing missing')
     .replace(/planned for an earlier target/, 'is written once for both agents')
     .replace(/is shared with (\w+) and planned there/, 'is the same folder as $1; set up once')
