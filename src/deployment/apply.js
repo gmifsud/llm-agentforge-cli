@@ -70,11 +70,15 @@ function applyPlan(plan, { dryRun = false } = {}) {
       case 'copy-entries': {
         const st = inspectDestination(a.destination);
         if (st.kind !== 'directory') throw refused('STALE_PLAN', `${a.destination} is no longer an ordinary directory (${st.kind}); refusing to merge`);
+        const copied = [];
         for (const name of a.entries) {
           const dest = path.join(a.destination, name);
           if (inspectDestination(dest).kind !== 'missing') { skipped.push({ kind: a.kind, destination: dest, reason: 'appeared since planning' }); continue; }
           fs.cpSync(path.join(a.source, name), dest, { recursive: true, dereference: true });
+          copied.push(name);
         }
+        // The record names only what was really copied, so a later refresh can never remove something that is the user's.
+        if (a.marker) writeMarker({ ...a.marker, data: { ...a.marker.data, names: copied } });
         break;
       }
 

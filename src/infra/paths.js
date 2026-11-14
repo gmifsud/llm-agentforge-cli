@@ -22,6 +22,7 @@ function createPaths({ homedir, platform = process.platform, scriptDir }) {
     reposCache: path.join(agentforgeDir, 'repos'),
     mergedSkills: path.join(agentforgeDir, 'merged-skills'),
     viewsDir: path.join(agentforgeDir, 'views'),
+    setAsideDir: path.join(agentforgeDir, 'set-aside'),
     templatesDir: scriptDir ? path.join(scriptDir, 'templates') : undefined,
     defaultVaultRoot:
       platform === 'win32'
