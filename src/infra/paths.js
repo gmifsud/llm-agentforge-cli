@@ -107,6 +107,10 @@ function resolvePrimarySource({ cliVault, env = {}, paths, config = {} }) {
   if (path.resolve(root).toLowerCase() === path.resolve(paths.mergedSkills).toLowerCase()) {
     throw failure('VIEW_AS_SOURCE', `${root} is the merged view, not a source; pass the real vault with --vault`);
   }
+  const inViews = path.relative(path.resolve(paths.viewsDir), path.resolve(root));
+  if (!inViews.startsWith('..') && !path.isAbsolute(inViews)) {
+    throw failure('VIEW_AS_SOURCE', `${root} is a set, not a source; pass the real vault with --vault`);
+  }
   return root;
 }
 

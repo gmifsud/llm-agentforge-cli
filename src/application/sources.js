@@ -33,6 +33,9 @@ function addSource({ paths, urlOrPath, name, branch }) {
     location = path.resolve(urlOrPath);
     const st = inspectDestination(location);
     if (st.kind === 'missing' || st.kind === 'file') throw usage(`local path does not exist or is not a directory: ${location}`);
+    // A view is something Agentforge builds from sources, never one of them.
+    if (isWithinLexical(paths.viewsDir, location)) throw refused('VIEW_AS_SOURCE', `${location} is a set, not a source`);
+    if (isWithinLexical(paths.mergedSkills, location)) throw refused('VIEW_AS_SOURCE', `${location} is the library, not a source`);
   }
 
   const registry = loadRegistry(paths);
