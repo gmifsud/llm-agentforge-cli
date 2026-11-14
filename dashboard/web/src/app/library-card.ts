@@ -29,6 +29,12 @@ import { sourceLabel } from './source-status';
         </ul>
       }
       @if (libraryStatus(); as st) { <p class="state" [class]="'state ' + st.tone" role="status">{{ st.text }}</p> }
+      @if (since(); as rows) {
+        <details class="since">
+          <summary>Since the last build: {{ sinceSummary() }}</summary>
+          @for (row of rows; track row.label) { <p class="fine"><b>{{ row.label }}</b> {{ row.names }}</p> }
+        </details>
+      }
       <p class="path">{{ c.library.path }}</p>
 
       @if (c.health; as h) {
@@ -54,6 +60,14 @@ import { sourceLabel } from './source-status';
           <p class="health-line"><span class="state caution">{{ h.shadows.length }} personal {{ h.shadows.length === 1 ? 'skill hides' : 'skills hide' }} a library skill of the same name</span>
             <button type="button" class="quiet tiny" (click)="showSkills('problems')">Show</button></p>
         }
+      }
+
+      @if (c.sets.length) {
+        <p class="health-line"><span class="state live">Sets: {{ c.sets.length }} · {{ setStats().onSets }} {{ setStats().onSets === 1 ? 'agent reads' : 'agents read' }} a set · {{ setStats().onLibrary }} read the whole library</span>
+          <a class="button quiet tiny" routerLink="/sets">Manage sets</a></p>
+      } @else if (c.health && !c.health.budget.fits) {
+        <p class="health-line"><span class="fine">No sets yet. A set gives an agent fewer skills, so every description fits.</span>
+          <a class="button quiet tiny" routerLink="/sets/new">Create a set</a></p>
       }
 
       <div class="actions">
@@ -104,6 +118,23 @@ export class LibraryCard {
   /** Worth showing once the library is big enough for the budget to bite, or whenever it already does. */
   showBudget = computed(() => { const h = this.s.catalog()?.health; return !!h && (!h.budget.fits || h.budget.entries > 50); });
   problemCount = computed(() => { const h = this.s.catalog()?.health; return h ? new Set(h.findings.filter(f => f.severity !== 'info').map(f => f.skillId)).size : 0; });
+
+  /** What changed in the sources since the last build, when there is a record to compare with and something to say. */
+  since = computed(() => {
+    const s = this.s.catalog()?.sinceLastBuild;
+    if (!s || s.first) return null;
+    const groups: [string, string[]][] = [['Added', s.added], ['Removed', s.removed], ['Content changed', s.changed], ['Moved to another source', s.moved]];
+    const rows = groups.filter(([, names]) => names.length)
+      .map(([label, names]) => ({ label, count: names.length, names: names.slice(0, 12).join(', ') + (names.length > 12 ? ` and ${names.length - 12} more` : '') }));
+    return rows.length ? rows : null;
+  });
+  sinceSummary = computed(() => (this.since() ?? []).map(r => `${r.count} ${r.label.toLowerCase()}`).join(', '));
+
+  /** How many agents read a set, and how many read the whole library. */
+  setStats = computed(() => {
+    const targets = (this.s.catalog()?.projects ?? []).flatMap(p => p.targets);
+    return { onSets: targets.filter(t => t.feeds === 'set').length, onLibrary: targets.filter(t => t.feeds === 'library').length };
+  });
 
   shade(i: number) { return `var(--mix-${Math.min(i, 5)})`; }
   libraryStatus() {

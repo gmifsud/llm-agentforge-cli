@@ -147,7 +147,7 @@ export class Board implements OnInit, OnDestroy {
           const id = `tgt:${report.project.id}:${t.id}`;
           if (this.plannedFor(report.project.id, t.id)) { out.push({ id, d: curve(libOut, b), tone: 'planned', stub: false }); continue; }
           // A cable means "this feeds that". A copy carries skills but is not connected, so it gets a socket state and no cable.
-          if (t.feeds === 'library') out.push({ id, d: curve(libOut, b), tone: 'live', stub: false });
+          if (t.feeds === 'library' || t.feeds === 'set') out.push({ id, d: curve(libOut, b), tone: 'live', stub: false });
           else if (t.feeds === 'vault' && vault) { const a = jack(`src:${vault.id}`); if (a) out.push({ id, d: curve(a, b), tone: 'caution', stub: false }); }
           else if (t.feeds === 'elsewhere' || t.feeds === 'needs-copy') out.push({ id, d: stub(b), tone: 'caution', stub: true });
           else if (t.feeds === 'broken') out.push({ id, d: stub(b), tone: 'fault', stub: true });

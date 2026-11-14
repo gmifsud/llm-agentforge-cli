@@ -17,6 +17,7 @@ export const INVOKE: Record<string, string> = {
 export function agentState(t: TargetReport): { text: string; tone: Tone } {
   switch (t.feeds) {
     case 'library': return { text: 'Reads the library', tone: 'live' };
+    case 'set': return { text: `Reads the set ${t.set}`, tone: 'live' };
     case 'vault': return { text: 'Reads your vault only', tone: 'caution' };
     case 'elsewhere': return { text: 'Reads another folder', tone: 'caution' };
     case 'broken': return { text: 'Link is broken', tone: 'fault' };
@@ -42,7 +43,7 @@ export function verifiedLine(t: TargetReport): { text: string; good: boolean } |
 
 export function isVerified(t: TargetReport) { return t.verification?.level === 'verified' && !t.verification.stale; }
 /** Skills reach the agent: show how to call one. */
-export function isWorking(t: TargetReport) { return t.feeds === 'library' || (t.feeds === 'copy' && t.copy?.state === 'fresh'); }
+export function isWorking(t: TargetReport) { return t.feeds === 'library' || t.feeds === 'set' || (t.feeds === 'copy' && t.copy?.state === 'fresh'); }
 export function needsRepoint(t: TargetReport) { return t.feeds === 'vault' || t.feeds === 'elsewhere' || t.feeds === 'broken'; }
 export function needsCopy(t: TargetReport) { return t.feeds === 'needs-copy'; }
 export function staleCopy(t: TargetReport) { return t.feeds === 'copy' && t.copy?.state === 'stale'; }
