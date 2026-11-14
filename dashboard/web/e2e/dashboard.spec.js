@@ -43,7 +43,9 @@ test('the board shows real wiring; a queued change writes nothing until applied'
   const contrast = await page.evaluate(() => {
     const css = getComputedStyle(document.documentElement);
     const lum = v => { const h = css.getPropertyValue(v).trim().replace('#', ''); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(x => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4).reduce((a, x, i) => a + x * [.2126, .7152, .0722][i], 0); };
-    return [['--ink', '--module'], ['--muted', '--panel'], ['--planned', '--module'], ['--live', '--module'], ['--caution', '--caution-tint'], ['--fault', '--fault-tint']]
+    return [['--ink', '--module'], ['--ink', '--panel'], ['--muted', '--panel'], ['--muted', '--module'], ['--planned', '--module'], ['--planned', '--panel'],
+      ['--planned', '--planned-tint'], ['--on-accent', '--planned'], ['--live', '--module'], ['--live', '--live-tint'], ['--caution', '--module'],
+      ['--caution', '--caution-tint'], ['--fault', '--module'], ['--fault', '--fault-tint']]
       .map(([a, b]) => { const v = [lum(a), lum(b)].sort((x, y) => y - x); return { pair: `${a}/${b}`, ratio: (v[0] + .05) / (v[1] + .05) }; });
   });
   for (const c of contrast) expect(c.ratio, c.pair).toBeGreaterThanOrEqual(4.5);
@@ -661,7 +663,7 @@ test('Fleet is the home page: an old /fleet bookmark arrives, the menu has no un
   await expect(page).toHaveURL(/\/$/);
   await expect(page).toHaveTitle('Fleet · agentforge');
   const nav = page.getByRole('navigation', { name: 'Pages' });
-  await expect(nav.getByRole('link')).toHaveText(['Fleet', 'Skills']);
+  await expect(nav.getByRole('link')).toHaveText(['Fleet', 'Sets', 'Skills']);
   await expect(nav.getByRole('link', { name: 'Fleet' })).toHaveAttribute('aria-current', 'page');
 
   // The library card is on this page: its state, and Rebuild through the review sheet.
@@ -748,4 +750,185 @@ test('fleet: Check all agents asks for every working agent at once, and a rebuil
     outbound = outbound.filter(u => !u.startsWith(big.url));
     await big.close(); for (const fn of bigCleanup) await fn();
   }
+});
+
+test('the library card and the rebuild preview say which skills changed since the last build, even when no link did', async ({ page }) => {
+  await page.goto(`${app.url}/`);
+  const library = page.getByRole('article', { name: 'Library' });
+  await expect(library.locator('details.since')).toHaveCount(0);            // no earlier build on record: nothing to compare with
+
+  await library.getByRole('button', { name: 'Rebuild the library' }).click();
+  await applyAll(page, 1);
+  await expect(library).toContainText('Up to date');
+  await expect(library.locator('details.since')).toHaveCount(0);            // just built: nothing has changed since
+
+  // A source file is edited. Every link is still right, but the content is not what was built.
+  fs.appendFileSync(path.join(f.vault, 'sql-review', 'SKILL.md'), 'edited in the source\n');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expect(library).toContainText('Up to date');
+  const since = library.locator('details.since');
+  await expect(since.locator('summary')).toHaveText('Since the last build: 1 content changed');
+  await since.locator('summary').click();
+  await expect(since).toContainText('Content changed sql-review');
+
+  const before = contentSnapshot(f.root);
+  await library.getByRole('button', { name: 'Rebuild the library' }).click();
+  await expect(tray(page)).toContainText('Content changed since the last build in 1 skill: sql-review');
+  expect(contentSnapshot(f.root)).toEqual(before);
+  await applyAll(page, 1);
+  await expect(library.locator('details.since')).toHaveCount(0);            // built again: it is the new record
+});
+
+test('type is Inter for text and Roboto Mono for paths, bundled with the app so nothing is fetched from outside', async ({ page }) => {
+  await page.goto(`${app.url}/`);
+  await page.getByRole('region', { name: 'Sources' }).waitFor();
+  const type = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const family = el => getComputedStyle(el).fontFamily;
+    return {
+      text: family(document.body), path: family(document.querySelector('.path')),
+      base: getComputedStyle(document.documentElement).fontSize, scheme: getComputedStyle(document.documentElement).colorScheme,
+      loaded: [...document.fonts].filter(f => f.status === 'loaded').map(f => f.family.replace(/"/g, '')),
+    };
+  });
+  expect(type.text).toMatch(/^"?Inter Variable/);
+  expect(type.path).toMatch(/^"?Roboto Mono Variable/);
+  expect(type.base).toBe('14px');
+  expect(type.scheme).toBe('dark');
+  expect(type.loaded).toContain('Inter Variable');
+  expect(type.loaded).toContain('Roboto Mono Variable');
+  // The fonts come from this server, so the check at the end of every test (no request leaves it) also covers them.
+});
+
+/** The fixture's library with categories on a few skills, so a set can select by category. */
+function categorise() {
+  const put = (dir, name, category) => fs.writeFileSync(path.join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} description\ncategory: ${category}\n---\n# ${name}\n`);
+  put(f.vault, 'sql-review', 'data'); put(f.vault, 'frontend-design', 'ui'); put(f.source, 'browser-testing', 'ui');
+}
+const viewOf = name => path.join(f.homedir, '.agentforge', 'views', name);
+
+test('sets: build one in the editor with a live budget, refuse a rule that selects nothing, and save it through the review sheet', async ({ page }) => {
+  categorise();
+  await page.goto(`${app.url}/`);
+  await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Sets' }).click();
+  await expect(page.getByRole('heading', { name: 'Sets', exact: true })).toBeVisible();
+  await expect(page.getByText('No sets yet.')).toBeVisible();
+  await expect(page.getByRole('row', { name: /The whole library/ })).toContainText('Every description fits');
+
+  await page.getByRole('link', { name: 'Create a set' }).click();
+  await expect(page).toHaveURL(/\/sets\/new$/);
+  await expect(page.getByRole('heading', { name: 'New set' })).toBeVisible();
+  const save = page.getByRole('button', { name: 'Save set' });
+  await expect(save).toBeDisabled();
+
+  await page.getByLabel('Name').fill('ui');
+  await page.getByLabel('Category', { exact: true }).selectOption({ label: 'ui (2)' });
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  const rules = page.getByRole('region', { name: 'Rules' });
+  const skills = page.getByRole('region', { name: 'Skills in this set' });
+  await expect(rules).toContainText('category ui');
+  await expect(skills).toContainText('2 skills in this set');
+  await expect(page.getByRole('region', { name: 'What agents will see' })).toContainText('Every description fits');
+  await expect(page.getByLabel('Include frontend-design')).toBeChecked();
+  await expect(page.getByLabel('Include sql-review')).not.toBeChecked();
+  await expect(save).toBeEnabled();
+
+  // Ticking and unticking edits the rules: a skill a rule brought in is left out, one that was not is picked by hand.
+  await page.getByLabel('Include browser-testing').uncheck();
+  await expect(rules).toContainText('skill browser-testing');
+  await expect(rules).toContainText('left out');
+  await expect(skills).toContainText('1 skill in this set');
+  await page.getByLabel('Include sql-review').check();
+  await expect(rules).toContainText('skill sql-review');
+  await expect(skills).toContainText('2 skills in this set');
+  await page.getByRole('button', { name: 'Put back browser-testing' }).or(page.getByRole('button', { name: 'Put back skill browser-testing' })).click();
+  await expect(skills).toContainText('3 skills in this set');
+
+  // A rule that selects nothing is not saved quietly.
+  await page.getByLabel('Kind of rule').selectOption('name');
+  await page.getByLabel('Value').fill('zzz-*');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(rules).toContainText('selects nothing');
+  await expect(save).toBeDisabled();
+  await expect(page.getByText(/name zzz-\* selects no skill/)).toBeVisible();
+  await page.getByRole('button', { name: 'Remove name zzz-*' }).click();
+  await expect(save).toBeEnabled();
+
+  const before = contentSnapshot(f.root);
+  await save.click();
+  await expect(page).toHaveURL(/\/sets$/);
+  await expect(tray(page)).toContainText('Create the set "ui" with 3 skills');
+  await expect(tray(page)).toContainText('Every description fits');
+  expect(contentSnapshot(f.root)).toEqual(before);                         // nothing is written until Apply
+  await applyAll(page, 1);
+  expect(fs.readdirSync(viewOf('ui')).sort()).toEqual(['browser-testing', 'frontend-design', 'sql-review']);
+  const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'ui', exact: true }) });
+  await expect(row).toContainText('3');
+  await expect(row).toContainText('Every description fits');
+  await expect(row).toContainText('0 agents');
+
+  // Opening it again loads its rules; the name cannot change, and saving replaces the rules.
+  await row.getByRole('link', { name: 'ui' }).click();
+  await expect(page.getByRole('heading', { name: 'Set ui' })).toBeVisible();
+  await expect(page.getByLabel('Name')).toHaveJSProperty('readOnly', true);
+  await expect(page.getByRole('region', { name: 'Rules' })).toContainText('category ui');
+  await page.getByLabel('Include sql-review').uncheck();
+  await page.getByRole('button', { name: 'Save set' }).click();
+  await expect(tray(page)).toContainText('Replace the rules of the set "ui": it will hold 2 skills');
+  await page.getByRole('button', { name: 'Discard all' }).click();
+  await page.goto(`${app.url}/sets/ui`);                                    // a deep link reloads
+  await expect(page.getByRole('heading', { name: 'Set ui' })).toBeVisible();
+});
+
+test('sets: an agent reads a set from the project panel, Fleet and the library card say so, and a set in use cannot be deleted', async ({ page }) => {
+  categorise();
+  const setsApp = require('../../../src/application/sets');
+  const { computeLibrary } = require('../../../src/application/sync');
+  const { createPaths } = require('../../../src/infra/paths');
+  const paths = createPaths({ homedir: f.homedir, scriptDir: path.resolve(__dirname, '../../..') });
+  setsApp.createSet({ paths, name: 'ui', rules: [{ type: 'category', value: 'ui' }], entries: computeLibrary({ paths, env: {} }).view.entries });
+
+  await page.goto(`${app.url}/`);
+  const card = page.getByRole('article', { name: 'Library' });
+  await expect(card).toContainText('Sets: 1 · 0 agents read a set · 0 read the whole library');
+
+  await page.locator('[data-select^="project:"]').first().click();
+  const drawer = page.getByRole('complementary', { name: 'Details' });
+  await drawer.getByRole('button', { name: 'Change what Claude Code reads' }).click();
+  const choose = drawer.getByRole('group', { name: 'What Claude Code reads' });
+  await expect(choose).toContainText('The whole library');
+  await choose.getByLabel(/^ui/).check();
+  await expect(choose).toContainText('Claude Code will see 2 skills');
+  await expect(choose).toContainText('not available in this project at all, not even by name');
+  const before = contentSnapshot(f.root);
+  await choose.getByRole('button', { name: 'Review this change' }).click();
+  await expect(tray(page)).toContainText('Link .claude/skills to the set ui');
+  await expect(tray(page)).toContainText('The other 1 are not available in this project at all');
+  expect(contentSnapshot(f.root)).toEqual(before);
+  await applyAll(page, 1);
+
+  await expect(drawer).toContainText('Reads the set ui');
+  await expect(page.locator('.agent-chip', { hasText: 'Claude Code · ui' })).toBeVisible();
+  await expect(card).toContainText('Sets: 1 · 1 agent reads a set · 0 read the whole library');
+
+  await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Sets' }).click();
+  const row = page.getByRole('row').filter({ has: page.getByRole('link', { name: 'ui', exact: true }) });
+  await expect(row).toContainText('1 agent');
+  await expect(row.getByRole('button', { name: 'Delete the set ui' })).toBeDisabled();
+
+  // Pointing the agent back at the library frees the set.
+  await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Fleet' }).click();
+  await page.locator('[data-select^="project:"]').first().click();
+  await drawer.getByRole('button', { name: 'Change what Claude Code reads' }).click();
+  await choose.getByLabel('The whole library').check();
+  await choose.getByRole('button', { name: 'Review this change' }).click();
+  await applyAll(page, 1);
+  await expect(drawer).toContainText('Reads the library');
+  await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Sets' }).click();
+  await row.getByRole('button', { name: 'Delete the set ui' }).click();
+  await expect(tray(page)).toContainText('Remove the set "ui" and its folder of links');
+  await applyAll(page, 1);
+  await expect(page.getByText('No sets yet.')).toBeVisible();
+  expect(fs.existsSync(viewOf('ui'))).toBe(false);
+  expect(fs.existsSync(path.join(f.vault, 'sql-review'))).toBe(true);       // the skills themselves are untouched
 });

@@ -7,7 +7,7 @@ const { contained } = require('./read-service');
 const { API, API_HEADER, API_HEADER_VALUE, WRITE_HEADER, WRITE_ROUTES, HOST, ERROR, LIMITS, ReadError, errorDto } = require('./constants');
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.ico': 'image/x-icon', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
-const CLIENT_ROUTES = new Set(['/', '/library', '/map', '/fleet']);
+const CLIENT_ROUTES = new Set(['/', '/library', '/map', '/fleet', '/sets']);
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -72,7 +72,7 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
         if (req.method === 'HEAD') { res.writeHead(204); res.end(); return; }
         json(200, await reader.run(operation, args)); return;
       }
-      const filename = CLIENT_ROUTES.has(decoded) || /^\/compare\/[^/]+$/.test(decoded) ? 'index.html' : decoded.slice(1);
+      const filename = CLIENT_ROUTES.has(decoded) || /^\/compare\/[^/]+$/.test(decoded) || /^\/sets\/[^/]+$/.test(decoded) ? 'index.html' : decoded.slice(1);
       const file = path.resolve(assetRoot, filename);
       contained(assetRoot, file);
       const mime = MIME[path.extname(file)];
