@@ -10,6 +10,7 @@ import { Tray } from './tray';
     <a routerLink="/" class="wordmark">agentforge</a>
     <nav aria-label="Pages">
       <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" ariaCurrentWhenActive="page">Fleet</a>
+      <a routerLink="/sets" routerLinkActive="active" ariaCurrentWhenActive="page">Sets</a>
       <a routerLink="/library" routerLinkActive="active" ariaCurrentWhenActive="page">Skills</a>
     </nav>
     <p class="observed" role="status">
