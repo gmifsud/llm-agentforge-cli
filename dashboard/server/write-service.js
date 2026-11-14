@@ -19,6 +19,8 @@ const setsApp = require('../../src/application/sets');
 const { validateSetName, normaliseSet, resolveSet } = require('../../src/domain/sets');
 const { buildVars, planProject } = require('../../src/application/project');
 const { applyPlan } = require('../../src/deployment/apply');
+const { planSetAside, applySetAside, planRestore, applyRestore } = require('../../src/application/set-aside');
+const { planAdopt } = require('../../src/application/adopt');
 const { computeView } = require('../../src/deployment/build-view');
 const { discoverSkills } = require('../../src/discovery/discover-skills');
 const { createGit } = require('../../src/infra/git');
@@ -32,7 +34,7 @@ const { createHash } = require('node:crypto');
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 /** Steps whose failure never cancels the others: updating one source, or asking one tool. */
 const INDEPENDENT = new Set(['source.fetch', 'project.verify']);
-const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove'];
+const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove', 'skill.setaside', 'skill.restore', 'project.adopt'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -316,6 +318,34 @@ class WriteService {
       run: () => { setsApp.removeSet({ paths: this.paths, name, projects: this.projects().map(p => p.path) }); } };
   }
 
+  // ─── hidden personal skills ────────────────────────────────────────────────
+  /** Move a personal skill that hides a library skill of the same name out of the way. Nothing is deleted. */
+  skill_setaside(args) {
+    const tool = str(args.tool, 'Tool', { max: 32 });
+    const name = str(args.name, 'Skill', { max: 200 });
+    const plan = planSetAside({ paths: this.paths, tool, name, libraryNames: this.view().entries.map(e => e.name) });
+    const lines = plan.ok ? [
+      { tone: 'change', text: `Move your personal ${tool} skill ${name} from ${plan.from} to ${plan.to}` },
+      { tone: 'note', text: 'Nothing is deleted or copied. The folder moves whole, with every file as it is.' },
+      { tone: 'note', text: `Restore puts it back. The library's ${name} is used in its place while it is set aside.` },
+    ] : [];
+    return { title: `Set aside ${name}`, lines, conflicts: plan.conflicts, ok: plan.ok, args: { tool, name },
+      run: () => { applySetAside(plan); return { lines: [{ tone: 'change', text: `${name} set aside at ${plan.to}` }] }; } };
+  }
+
+  /** Put a set-aside personal skill back where it came from. */
+  skill_restore(args) {
+    const tool = str(args.tool, 'Tool', { max: 32 });
+    const name = str(args.name, 'Skill', { max: 200 });
+    const plan = planRestore({ paths: this.paths, tool, name });
+    const lines = plan.ok ? [
+      { tone: 'change', text: `Move ${name} back from ${plan.from} to ${plan.to}` },
+      { tone: 'note', text: `Nothing is deleted. It goes back exactly as it was, and it will hide the library's ${name} again.` },
+    ] : [];
+    return { title: `Restore ${name}`, lines, conflicts: plan.conflicts, ok: plan.ok, args: { tool, name },
+      run: () => { applyRestore(plan); return { lines: [{ tone: 'change', text: `${name} restored to ${plan.to}` }] }; } };
+  }
+
   // ─── projects ──────────────────────────────────────────────────────────────
   project_add(args) {
     const raw = str(args.path, 'Project folder');
@@ -366,6 +396,28 @@ class WriteService {
         if (r.sampled.length) out.push({ tone: 'note', text: `Asked about: ${r.sampled.join(', ')}` });
         if (r.level === 'not-listed' && TARGETS[target].copyOnly !== true && tool === 'antigravity') out.push({ tone: 'note', text: 'Antigravity does not follow links. Give it a copy.' });
         return { lines: out, message: good ? '' : 'Checked; the tool did not confirm it sees the skills.' };
+      } };
+  }
+
+  /** Adopt a project's own skills folder: the library's missing skills are copied in beside the owner's. */
+  project_adopt(args) {
+    const p = this.project(str(args.projectId, 'Project', { max: 64 }));
+    const target = str(args.target, 'Agent', { max: 32 });
+    if (!TARGETS[target]) throw bad(`Unknown agent "${target}".`);
+    const plan = planAdopt({ projectRoot: p.path, target: TARGETS[target], libraryRoot: this.paths.mergedSkills });
+    const lines = [];
+    if (plan.ok) {
+      const dir = rel(p.path, plan.folder);
+      for (const a of plan.actions) lines.push(describeAction(a, p.path, this.paths.mergedSkills, this.primary()));
+      if (plan.own.length) lines.push({ tone: 'note', text: `Your own skills stay as they are: ${list(plan.own)}` });
+      if (plan.shared.length) lines.push({ tone: 'note', text: `${list(plan.shared)} ${plan.shared.length === 1 ? 'is' : 'are'} in the library too: yours is kept and the library's is not copied.` });
+      lines.push({ tone: 'note', text: 'Nothing of yours is moved, replaced or deleted. Agentforge records which skills it added, so a later Refresh copy touches only those.' });
+      if (plan.incoming.length) lines.push({ tone: 'warn', text: `Adds ${plural(plan.incoming.length, 'folder')} to ${dir}, which git shows as untracked files until you commit or ignore them.` });
+    }
+    return { title: `Adopt ${TARGETS[target].dir}/skills in ${p.name}`, lines, conflicts: plan.conflicts, ok: plan.ok, args: { projectId: p.id, target },
+      run: () => {
+        applyPlan({ target, actions: plan.actions, conflicts: [], notes: plan.notes });
+        return { lines: [{ tone: 'add', text: `Adopted ${rel(p.path, plan.folder)}: ${plural(plan.incoming.length, 'skill')} added beside yours` }] };
       } };
   }
 
