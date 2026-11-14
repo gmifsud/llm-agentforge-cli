@@ -228,3 +228,125 @@ test('one failing fetch or refused check does not cancel the others; any other f
   const stopped = apply(svc, { kind: 'source.detach', args: { name: 'nothing' } }, { kind: 'library.rebuild' });
   assert.deepEqual(stopped.map(r => r.status), ['refused', 'skipped']);
 });
+
+test('the rebuild preview and the catalogue say which skills changed content since the last build, even when no link changed', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  assert.equal(new ReadService(f.options).refresh().sinceLastBuild, null, 'no record before the first build');
+  apply(svc, { kind: 'library.rebuild' });
+
+  let catalog = new ReadService(f.options).refresh();
+  assert.equal(catalog.sinceLastBuild.first, false);
+  assert.deepEqual(catalog.sinceLastBuild.changed, []);
+  assert.match(catalog.sinceLastBuild.builtAt, /^\d{4}-\d\d-\d\dT/);
+  assert.ok(!ok(svc, { kind: 'library.rebuild' }).lines.some(l => /Content changed/.test(l.text)), 'nothing to report yet');
+
+  // A source file is edited. The library is made of links, so nothing about the library on disk differs.
+  fs.appendFileSync(path.join(f.vault, 'sql-review', 'SKILL.md'), 'edited\n');
+  const before = contentSnapshot(f.root);
+  const preview = ok(svc, { kind: 'library.rebuild' });
+  assert.deepEqual(contentSnapshot(f.root), before, 'a preview writes nothing, the record included');
+  assert.ok(preview.lines.some(l => l.tone === 'change' && /Content changed since the last build in 1 skill: sql-review/.test(l.text)));
+  assert.ok(preview.lines.some(l => /Already up to date/.test(l.text)), 'the links are current; only the content moved');
+  catalog = new ReadService(f.options).refresh();
+  assert.deepEqual(catalog.sinceLastBuild.changed, ['sql-review']);
+  assert.equal(catalog.library.inSync, true);
+
+  apply(svc, { kind: 'library.rebuild' });
+  assert.deepEqual(new ReadService(f.options).refresh().sinceLastBuild.changed, [], 'once it is built, it is the new record');
+
+  // A damaged record is no record: the board shows nothing, and the next build still works.
+  fs.writeFileSync(path.join(f.homedir, '.agentforge', 'lock.json'), '{ nope');
+  assert.equal(new ReadService(f.options).refresh().sinceLastBuild, null);
+  assert.deepEqual(apply(svc, { kind: 'library.rebuild' }).map(r => r.status), ['applied']);
+});
+
+test('the dashboard will not attach a set as a source, and rebuilding the library also builds the sets', t => {
+  const f = fixture(t);
+  const { createPaths } = require('../src/infra/paths');
+  const sets = require('../src/application/sets');
+  const { computeLibrary } = require('../src/application/sync');
+  const paths = createPaths({ homedir: f.homedir, scriptDir: path.resolve(__dirname, '..') });
+  sets.createSet({ paths, name: 'mine', rules: [{ type: 'source', value: 'vault' }], entries: computeLibrary({ paths, env: {} }).view.entries });
+
+  const svc = new WriteService(f.options);
+  const attach = svc.preview({ kind: 'source.attach', args: { location: sets.setView(paths, 'mine'), name: 'myset' } });
+  assert.equal(attach.ok, false);
+  assert.ok(attach.conflicts.some(c => /skill set/.test(c)), JSON.stringify(attach.conflicts));
+
+  // A skill added to the vault reaches the set when the library is rebuilt: nothing is ever stale against the library.
+  makeVault(f.root, 'extra-skill-home', ['late-skill']);
+  fs.cpSync(path.join(f.root, 'extra-skill-home', 'late-skill'), path.join(f.vault, 'late-skill'), { recursive: true });
+  assert.deepEqual(apply(svc, { kind: 'library.rebuild' }).map(r => r.status), ['applied']);
+  assert.ok(fs.readdirSync(sets.setView(paths, 'mine')).includes('late-skill'));
+});
+
+test('sets in the dashboard: saved, read by an agent, and removed, all as reviewed changes', t => {
+  const f = fixture(t);
+  const { createPaths } = require('../src/infra/paths');
+  const setsApp = require('../src/application/sets');
+  const paths = createPaths({ homedir: f.homedir, scriptDir: path.resolve(__dirname, '..') });
+  const put = (dir, name, category) => fs.writeFileSync(path.join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name} description\ncategory: ${category}\n---\n# ${name}\n`);
+  put(f.vault, 'sql-review', 'data'); put(f.vault, 'frontend-design', 'ui'); put(f.source, 'browser-testing', 'ui');
+  const svc = new WriteService(f.options);
+  const save = { kind: 'set.save', args: { name: 'ui', rules: [{ type: 'category', value: 'ui' }] } };
+
+  const before = contentSnapshot(f.root);
+  const preview = ok(svc, save);
+  assert.ok(preview.lines.some(l => /Create the set "ui" with 2 skills/.test(l.text)), JSON.stringify(preview.lines));
+  assert.ok(preview.lines.some(l => /Every description fits/.test(l.text)));
+  assert.deepEqual(contentSnapshot(f.root), before, 'a preview writes nothing');
+
+  // What cannot be saved is refused with a reason, not saved quietly.
+  assert.match(svc.preview({ kind: 'set.save', args: { name: 'x', rules: [{ type: 'skill', value: 'nope' }] } }).conflicts.join(' '), /selects no skill/);
+  assert.match(svc.preview({ kind: 'set.save', args: { name: 'x', rules: [{ type: 'skill', value: 'sql-review', exclude: true }] } }).conflicts.join(' '), /at least one rule/);
+  assert.equal(svc.preview({ kind: 'set.save', args: { name: 'library', rules: [{ type: 'skill', value: 'sql-review' }] } }).ok, false);
+  assert.equal(svc.preview({ kind: 'set.save', args: { name: 'x', rules: [{ type: 'tag', value: 'y' }] } }).ok, false);
+
+  assert.deepEqual(apply(svc, save).map(r => r.status), ['applied']);
+  assert.deepEqual(fs.readdirSync(setsApp.setView(paths, 'ui')).sort(), ['browser-testing', 'frontend-design']);
+  assert.match(svc.preview(save).conflicts.join(' '), /already exists/, 'an existing set is not replaced by accident');
+  const replace = ok(svc, { kind: 'set.save', args: { name: 'ui', replace: true, rules: [...save.args.rules, { type: 'skill', value: 'sql-review' }] } });
+  assert.ok(replace.lines.some(l => /Replace the rules of the set "ui": it will hold 3 skills/.test(l.text)), JSON.stringify(replace.lines));
+
+  // The catalogue lists the set, and each skill in the library carries what the editor needs.
+  let catalog = new ReadService(f.options).refresh();
+  assert.deepEqual(catalog.sets.map(s => [s.name, s.built, s.rules.length]), [['ui', true, 1]]);
+  const skill = catalog.skills.find(s => s.name === 'sql-review');
+  assert.equal(skill.category, 'data');
+  assert.equal(skill.descriptionChars, 'sql-review description'.length);
+
+  // An agent reads the set: its one folder link now points there, and the preview says what is lost.
+  const project = catalog.projects[0].project;
+  const wire = { kind: 'project.wire', args: { projectId: project.id, targets: ['claude'], writeDocs: false, repoint: true, set: 'ui' } };
+  const w = ok(svc, wire);
+  assert.ok(w.lines.some(l => /Link \.claude\/skills to the set ui/.test(l.text)), JSON.stringify(w.lines));
+  assert.ok(w.lines.some(l => /not available in this project at all/.test(l.text)), JSON.stringify(w.lines));
+  assert.equal(svc.preview({ kind: 'project.wire', args: { ...wire.args, set: 'nope' } }).ok, false, 'a set that does not exist cannot be read');
+  assert.deepEqual(apply(svc, wire).map(r => r.status), ['applied']);
+  const reading = new ReadService(f.options).refresh().projects[0].targets.find(x => x.id === 'claude');
+  assert.equal(reading.feeds, 'set');
+  assert.equal(reading.set, 'ui');
+
+  // A set that an agent reads cannot be removed until the agent is pointed elsewhere.
+  const blocked = svc.preview({ kind: 'set.remove', args: { name: 'ui' } });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.conflicts.join(' '), /read by 1 agent/);
+  apply(svc, { kind: 'library.rebuild' });
+  apply(svc, { kind: 'project.wire', args: { projectId: project.id, targets: ['claude'], writeDocs: false, repoint: true } });
+  assert.equal(new ReadService(f.options).refresh().projects[0].targets.find(x => x.id === 'claude').feeds, 'library');
+  ok(svc, { kind: 'set.remove', args: { name: 'ui' } });
+  assert.deepEqual(apply(svc, { kind: 'set.remove', args: { name: 'ui' } }).map(r => r.status), ['applied']);
+  assert.ok(!fs.existsSync(setsApp.setView(paths, 'ui')));
+  assert.deepEqual(new ReadService(f.options).refresh().sets, []);
+  assert.ok(fs.existsSync(path.join(f.vault, 'sql-review')), 'the skills themselves are untouched');
+});
+
+test('a damaged sets file is reported, and does not break the catalogue', t => {
+  const f = fixture(t);
+  assert.deepEqual(new ReadService(f.options).refresh().sets, [], 'none yet');
+  fs.writeFileSync(path.join(f.homedir, '.agentforge', 'sets.json'), '{ nope');
+  const catalog = new ReadService(f.options).refresh();
+  assert.deepEqual(catalog.sets, []);
+  assert.ok(catalog.warnings.some(w => /sets\.json/.test(w)), JSON.stringify(catalog.warnings));
+});
