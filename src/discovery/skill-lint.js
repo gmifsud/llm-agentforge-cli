@@ -57,14 +57,14 @@ function lintSkill(dir) {
   const file = path.join(dir, 'SKILL.md');
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch {
-    return { name: folder, description: '', fields: null, findings: [finding('NO_SKILL_MD', 'error', ['claude', 'codex', 'gemini', 'cursor'], `${folder} has no readable SKILL.md`)] };
+    return { name: folder, description: '', category: '', fields: null, findings: [finding('NO_SKILL_MD', 'error', ['claude', 'codex', 'gemini', 'cursor'], `${folder} has no readable SKILL.md`)] };
   }
   const { fields } = parseFrontmatter(text);
   const findings = [];
   if (!fields) {
     findings.push(finding('NO_FRONTMATTER', 'error', ['codex', 'gemini', 'cursor'],
       `${folder}: SKILL.md has no frontmatter on line 1. Claude Code falls back to the folder name; the other tools need name and description.`));
-    return { name: folder, description: '', fields: null, findings };
+    return { name: folder, description: '', category: '', fields: null, findings };
   }
   const name = fields.name;
   const description = fields.description || '';
@@ -86,7 +86,9 @@ function lintSkill(dir) {
   if (/^true$/i.test(fields['disable-model-invocation'] || '')) {
     findings.push(finding('MODEL_INVOCATION_OFF', 'info', ['claude', 'cursor'], `${folder}: the agent will not use it on its own; it only runs when you call it.`));
   }
-  return { name: name || folder, description, fields, findings };
+  // The skill's own category, as written; a set can select skills by it.
+  const category = typeof fields.category === 'string' ? fields.category.trim() : '';
+  return { name: name || folder, description, category, fields, findings };
 }
 
 /**
