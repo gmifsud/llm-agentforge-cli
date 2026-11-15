@@ -324,9 +324,12 @@ class WriteService {
     const tool = str(args.tool, 'Tool', { max: 32 });
     const name = str(args.name, 'Skill', { max: 200 });
     const plan = planSetAside({ paths: this.paths, tool, name, libraryNames: this.view().entries.map(e => e.name) });
+    // A personal skill is often a link (another tool manages the folder). Then the link moves and its target is never touched.
+    const isLink = plan.ok && inspectDestination(plan.from).kind === 'link';
     const lines = plan.ok ? [
       { tone: 'change', text: `Move your personal ${tool} skill ${name} from ${plan.from} to ${plan.to}` },
-      { tone: 'note', text: 'Nothing is deleted or copied. The folder moves whole, with every file as it is.' },
+      isLink ? { tone: 'note', text: 'This is a link. Nothing is deleted or copied: the link moves, and what it points to is not touched.' }
+        : { tone: 'note', text: 'Nothing is deleted or copied. The folder moves whole, with every file as it is.' },
       { tone: 'note', text: `Restore puts it back. The library's ${name} is used in its place while it is set aside.` },
     ] : [];
     return { title: `Set aside ${name}`, lines, conflicts: plan.conflicts, ok: plan.ok, args: { tool, name },

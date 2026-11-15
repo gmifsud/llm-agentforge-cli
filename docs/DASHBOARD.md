@@ -39,7 +39,7 @@ Everything you manage, in one place, top to bottom:
 
 | Part | Shows | You can |
 | :-- | :-- | :-- |
-| **Library** | How many skills your agents can use and from which sources, whether the library on disk is up to date, how many skill descriptions fit the listing budget, skills with problems, and personal skills that hide a library skill | Build or rebuild the library, browse all skills. A second card appears when two sources have a skill with the same name: it counts the clashes that need a look and links to **Compare** |
+| **Library** | How many skills your agents can use and from which sources, whether the library on disk is up to date, how many skill descriptions fit the listing budget, skills with problems, personal skills that hide a library skill, and personal skills you have set aside | Build or rebuild the library, browse all skills, **Restore** a skill you set aside. A second card appears when two sources have a skill with the same name: it counts the clashes that need a look and links to **Compare** |
 | **Counts** | Sources, sources needing attention, sources not downloaded; projects, projects needing attention, projects with an agent the tool has not confirmed | Click a count to filter its list by it. Click it again, or **Clear**, to undo |
 | **Search and layout** | One search box for both lists, and **Both**, **Sources**, **Projects** | Choose how much to show. The choice is remembered in the browser. At a narrow width the two lists stack |
 | **Sources** | Your vault and every attached folder or Git repository, in priority order, with skills, state and revision | Open one, attach a repository, tick Git sources for a bulk action |
@@ -49,7 +49,7 @@ Things to know:
 
 - **Order matters, so sources are never sorted.** When two sources have the same skill, the higher one wins. *Up* and *Down* are disabled while a search or filter is active, because moving a source inside a partial list would reorder a view of the list, not the list.
 - **Folders.** A project is grouped under its parent folder, headed by the last two parts of that folder. Two different folders that would share a heading are shown by their full path. A list of more than 30 projects starts collapsed; **Expand all** and **Collapse all** are above it. While you search or filter, every folder with a match is open, so a collapsed folder never hides a result.
-- **Open one.** Click a name to open it in the side panel. For a source: kind, path, state, revision, its place in the order with *Move up* and *Move down*, *Show its skills*, *Fetch updates* (Git sources) and *Detach*. For a project: each agent's state, its instruction file, how to call a skill in that tool, the fix that applies (*Repoint*, *Copy instead*, *Refresh copy*, *Verify*), *Wire agents*, *Show wiring*, and *Remove from list* for projects you added. Esc or *Close details* returns focus to the row you came from; on a narrow screen the panel takes the place of the lists.
+- **Open one.** Click a name to open it in the side panel. For a source: kind, path, state, revision, its place in the order with *Move up* and *Move down*, *Show its skills*, *Fetch updates* (Git sources) and *Detach*. For a project: each agent's state, its instruction file, how to call a skill in that tool, the fix that applies (*Repoint*, *Copy instead*, *Refresh copy*, *Verify*, or *Adopt* for a folder of your own skills, see below), *Wire agents*, *Show wiring*, and *Remove from list* for projects you added. Esc or *Close details* returns focus to the row you came from; on a narrow screen the panel takes the place of the lists.
 - **Several at once.** Tick Git sources or projects (a folder's box ticks every project in it, a table header's box ticks everything showing). A bar shows what is selected with **Fetch selected** and **Verify selected**. Fetching queues one fetch per Git source and a single rebuild. Verifying queues one check for each working agent the tool has not confirmed, or confirmed before the skills changed, and sends one short question per agent, on your account, only when you apply. Both only queue changes for review, and work already in the review sheet is not counted twice. Selections you cannot currently see (filtered away, or in a list the layout hides) are counted as "not showing", so a bulk action never touches something out of sight without saying so.
 
 - **What changed since the last build.** The library is a folder of links, so a Git update can change a skill's content without any link changing. Each build records what it held (`~/.agentforge/lock.json`: source, revision and a content digest per skill). The Library card then shows a *Since the last build* line, for example "2 added, 1 content changed", which opens to the skill names, and the rebuild preview names the skills whose content changed. The record is only compared with: the library is always computed from your sources on disk, and a missing or damaged record just means there is nothing to compare with. `agentforge update` and `repo sync` print the same.
@@ -91,6 +91,21 @@ The library holds every skill, and an agent can only choose among the descriptio
 
 Every skill found in every source, searchable and filterable by source. Switch between *Everything found*, *In the library*, *Name clashes*, *Need a look* and *Have problems*. Select a skill to see where it comes from, why it is or is not what your agents get, read its `SKILL.md` as plain text, and, when another source has a skill with the same name, compare the copies and choose which one your agents get. Folders that were skipped while looking for skills, and why, are listed under the table.
 
+**A personal skill that hides a library skill.** A skill of your own in `~/.claude/skills` (or the same place for another tool) with the same name as a library skill is used instead of it. Select the library skill and its problems list shows both paths, **Yours** and **Library** (the folder the library takes its copy from), and says how they differ: identical, or different, naming whether the descriptions differ and how many files each has. *Set aside my copy* queues one change. Applying it **moves your folder, whole, to `~/.agentforge/set-aside/<tool>/<name>`** and writes a record beside it (`<name>.json`, never inside your folder), so the library's skill is used and nothing is deleted or copied. If your personal skill is itself a link (another tool may manage the folder), the link is what moves and the folder it points to is never touched; the preview says so. If the move would cross to another drive it is refused, because Agentforge never copies and then deletes your files. A skill that does not hide a library skill is not offered.
+
+**Restore.** Everything set aside is listed under the table on the Skills page and on the Library card, with where it is held and where it goes back to. *Restore* queues the move back. It is disabled, with a note, when something is already at the original place. The place it goes back to is worked out from the tool and the name, never read from the record, so an edited record cannot send the folder elsewhere.
+
+### Adopting a folder of your own skills
+
+A project whose `.claude/skills` (or another agent's) is an ordinary folder that Agentforge did not make reads in Fleet as "Has its own folder (n skills), not managed here". Its panel row has **Adopt**, which opens a box saying what happens before anything is queued:
+
+- Your own skills stay exactly as they are, listed by name. A skill with the same name as a library skill stays yours, and the library's is not copied.
+- The library's missing skills are **copied in beside yours**. Nothing of yours is moved, replaced or deleted, and no per-skill links are made.
+- A record beside the folder (`<dot>/.agentforge-skills.json`) names exactly what Agentforge added, so a later *Refresh copy* replaces only those. Only that record is added to `.gitignore`: the folder itself is not, because it holds skills of yours you may commit.
+- **The added folders show in git as untracked files** until you commit or ignore them. The preview says so; the library is copied in whole, so on a large library that is many folders.
+
+*Review this change* queues it. It is offered only when the library is built, and only for a folder Agentforge has no record of. It is not offered with a set, because a copy's freshness is measured against the whole library. Once adopted, the row reads as a managed copy, and *Refresh copy* appears when the library changes.
+
 ## How changes work
 
 Nothing you click writes to disk directly. Each action adds one or more steps to the **review sheet** at the bottom of the screen:
@@ -115,6 +130,9 @@ Nothing you click writes to disk directly. Each action adds one or more steps to
 | Remove a set | Removes its rules and its folder of links. Refused while an agent reads it | Touch the skills |
 | Read a set (per agent) | Repoints that one agent's skills folder at the set's folder, or back at the library | Touch the folder it pointed at before |
 | Repoint | Removes the old link and links to the library | Touch the folder the old link pointed at |
+| Set aside | Moves your personal skill whole to `~/.agentforge/set-aside/<tool>/<name>`, with a record beside it | Delete or copy it, move it to another drive, or touch any other personal skill |
+| Restore | Moves a set-aside skill back to the place worked out from the tool and name | Overwrite what is there now, or follow the path in the record |
+| Adopt | Copies the library's missing skills into your own skills folder and records which it added | Move, replace or delete anything of yours, or add your skills folder to `.gitignore` |
 
 The dashboard wires projects to the **library**, never directly to your vault, so attached sources and your collision choices always reach your agents. Use the command line if you deliberately want a vault-only link.
 
@@ -135,7 +153,7 @@ From the repository root:
 npm test                 # core + server, including the write paths
 npm run dashboard:test   # client state, tray ordering, apply flow
 npm run dashboard:build
-npm run dashboard:e2e    # real browser: Fleet at 150 projects, side panel, bulk actions, scoped map, preview-without-write, repoint, verify, refusals, zoom, focus
+npm run dashboard:e2e    # real browser: Fleet at 150 projects, side panel, bulk actions, scoped map, preview-without-write, repoint, verify, set aside, restore, adopt, refusals, zoom, focus
 git diff --check
 ```
 

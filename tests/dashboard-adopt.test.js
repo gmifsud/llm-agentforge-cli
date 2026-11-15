@@ -11,7 +11,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { WriteService } = require('../dashboard/server/write-service');
 const { readMarker, copyState } = require('../src/deployment/copy-state');
+const { inspectDestination } = require('../src/infra/fs-inspect');
 const { fixture, contentSnapshot } = require('./dashboard-fixtures');
+const { mkLink } = require('./helpers');
 
 const ok = (svc, change) => { const p = svc.preview(change); assert.equal(p.ok, true, JSON.stringify(p.conflicts)); return p; };
 const apply = (svc, ...changes) => svc.apply(changes).results;
@@ -122,6 +124,28 @@ test('restore: a tampered record cannot send the folder anywhere but the place w
   assert.deepEqual(apply(w.svc, restore()).map(r => r.status), ['applied']);
   assert.ok(fs.existsSync(path.join(w.personal, 'frontend-design', 'SKILL.md')));
   assert.equal(fs.existsSync(path.dirname(elsewhere)), false, 'nothing was written where the record pointed');
+});
+
+test('set aside: a personal skill that is a link moves as a link, the preview says so, and what it points to is untouched', t => {
+  const w = personalWorld(t);
+  const elsewhere = path.join(w.root, 'managed-elsewhere', 'frontend-design');
+  fs.mkdirSync(elsewhere, { recursive: true });
+  fs.writeFileSync(path.join(elsewhere, 'SKILL.md'), '---\nname: frontend-design\n---\nowned by another tool\n');
+  fs.rmSync(path.join(w.personal, 'frontend-design'), { recursive: true });
+  mkLink(elsewhere, path.join(w.personal, 'frontend-design'));
+  const targetBefore = contentSnapshot(elsewhere);
+
+  const preview = ok(w.svc, setAside());
+  assert.ok(has(preview, 'note', /This is a link/), said(preview));
+  assert.ok(has(preview, 'note', /what it points to is not touched/), said(preview));
+  assert.ok(!preview.lines.some(l => /moves whole/.test(l.text)), 'it does not claim to move a folder it does not move');
+
+  assert.deepEqual(apply(w.svc, setAside()).map(r => r.status), ['applied']);
+  assert.equal(inspectDestination(w.heldAt).kind, 'link', 'the link itself is what moved');
+  assert.deepEqual(contentSnapshot(elsewhere), targetBefore, 'the folder it points to is untouched');
+  assert.deepEqual(apply(w.svc, restore()).map(r => r.status), ['applied']);
+  assert.equal(inspectDestination(path.join(w.personal, 'frontend-design')).kind, 'link', 'it comes back as the same link');
+  assert.deepEqual(contentSnapshot(elsewhere), targetBefore);
 });
 
 test('set aside and restore are one-after-another changes: a refusal stops what follows', t => {

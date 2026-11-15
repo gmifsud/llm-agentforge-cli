@@ -210,6 +210,13 @@ Three cases, and `link` handles each differently. You do not have to work out wh
 
 To throw away an ordinary folder and replace it with a link: `agentforge link --force --no-preserve`. This is the only command that deletes a folder, and it checks right before deleting that the path is still an ordinary folder and not a link.
 
+**In the dashboard** (there is no command for these two):
+
+- **Adopt** a project folder of your own skills that nothing here manages. The project panel's *Adopt* button explains it first: your skills stay exactly as they are, the library's missing skills are copied in beside them, and a record next to the folder (`<dot>/.agentforge-skills.json`) names what was added so a later refresh replaces only those. A skill of yours with the same name as a library skill stays yours. The added folders show in git as untracked files until you commit or ignore them. Only the record is added to `.gitignore`, never your skills folder.
+- **Set aside** a personal skill that hides a library skill. A skill of your own in `~/.claude/skills` (or the same place for another tool) with the same name as a library skill is used instead of it; `agentforge doctor` reports this as a personal skill hiding a library one. In the dashboard, select the skill on the Skills page to see both paths and how the two copies differ, then *Set aside my copy*. Your folder is **moved, whole,** to `~/.agentforge/set-aside/<tool>/<name>`, with a record beside it. Nothing is deleted or copied, and a move to another drive is refused. If your skill is a link, the link moves and the folder it points to is not touched. *Restore*, on the Skills page or the Library card, moves it back.
+
+Both are previewed in the review sheet and change nothing until you apply.
+
 ### 6.6 Detach a repository
 
 ```
@@ -371,7 +378,9 @@ Agentforge prefers a clear refusal to a guess. The common ones:
 | `~/.agentforge/sets.json` | The rules of every set | Yes; you lose the sets, not the skills |
 | `~/.agentforge/views/<set>/` | One folder of links per set | Yes; `set build` recreates it |
 | `~/.agentforge/projects.json` | Projects remembered by the dashboard | Yes; you lose the list, not the projects |
-| `<project>/<dot>/skills` | A link (or, with `copy`, a copy) | Yes; `link` recreates it |
+| `~/.agentforge/set-aside/<tool>/<name>/` and `<name>.json` | A personal skill you set aside in the dashboard, and the record of where it came from | **No**; this is your own skill. *Restore* in the dashboard moves it back |
+| `<project>/<dot>/.agentforge-skills.json` | Names what Agentforge copied into a folder (a copy, or an adopted folder) | Yes; the folder is then treated as yours and not refreshed |
+| `<project>/<dot>/skills` | A link (or, with `copy`, a copy) | Yes; `link` recreates it. **Not** if it is an adopted folder: it holds your own skills |
 | `<project>/CLAUDE.md` etc. | Yours after the first write | **No** |
 
 ## 11. Rules the code enforces, so you do not have to
@@ -382,7 +391,8 @@ Agentforge prefers a clear refusal to a guess. The common ones:
 - Git is invoked as a program with an argument list, never a shell string. Clone disables hooks and submodules.
 - A skill is a folder inside its source (also after resolving links) that contains `SKILL.md`. Nothing else is published.
 - The view is an output. It is never a source, and it is rebuilt by swap, never by delete-then-fill.
-- `.gitignore` receives only `<dot>/skills`. Your instruction file and the rest of the dot-folder are yours to commit or not.
+- `.gitignore` receives only `<dot>/skills`, plus the record `<dot>/.agentforge-skills.json` when the folder is a copy (the record holds a path on this machine). When you adopt a folder of your own skills it receives only the record, never the folder. Your instruction file and the rest of the dot-folder are yours to commit or not.
+- Your own skills are never deleted. Setting one aside moves it whole to `~/.agentforge/set-aside` and refuses to cross drives; adopting a folder adds beside your skills and never replaces one.
 
 ## 12. For the engineer who has to change it
 
