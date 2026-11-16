@@ -5,7 +5,7 @@ const path = require('node:path');
 const { discoverSkills } = require('../discovery/discover-skills');
 const { digestSkill } = require('../discovery/skill-digest');
 const { inspectDestination, removeLinkOnly, createDirectoryLink, IS_WIN } = require('../infra/fs-inspect');
-const { refused } = require('../domain/errors');
+const { refused, failure } = require('../domain/errors');
 
 /**
  * Compute the merged view: one link per exported skill name.
@@ -103,8 +103,8 @@ function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, 
 function key(name) { return IS_WIN ? name.toLowerCase() : name; }
 
 /**
- * Materialize the view by staging and swapping, so a failure mid-way never
- * leaves projects pointing at an empty or partial directory.
+ * Stage a complete view before replacing the live path. Restore the previous
+ * view if promotion fails; failed recovery preserves and reports both paths.
  */
 function materializeView(viewDir, entries) {
   const parent = path.dirname(viewDir);
@@ -112,6 +112,10 @@ function materializeView(viewDir, entries) {
   const staging = `${viewDir}.staging-${process.pid}`;
   const old = `${viewDir}.old-${process.pid}`;
   const linkType = IS_WIN ? 'junction' : 'symlink';
+
+  if (inspectDestination(old).kind !== 'missing') {
+    throw refused('VIEW_BACKUP', `${old} already exists. Recover or move this previous view before rebuilding; it will not be overwritten.`);
+  }
 
   // Validate the existing view BEFORE touching anything: it must be missing or a directory of links only.
   const current = inspectDestination(viewDir);
@@ -130,7 +134,18 @@ function materializeView(viewDir, entries) {
   }
 
   if (current.kind === 'directory') fs.renameSync(viewDir, old);
-  fs.renameSync(staging, viewDir);
+  try {
+    fs.renameSync(staging, viewDir);
+  } catch (err) {
+    if (current.kind === 'directory') {
+      try { fs.renameSync(old, viewDir); }
+      catch (recovery) {
+        throw failure('VIEW_RECOVERY_FAILED', `View promotion failed (${err.message}) and restoring the previous view failed (${recovery.message}). Previous view: ${old}. Staged replacement: ${staging}. Recover these before rebuilding.`);
+      }
+    }
+    removeLinksDir(staging);
+    throw err;
+  }
   if (current.kind === 'directory') removeLinksDir(old);
   return { linked: entries.length };
 }

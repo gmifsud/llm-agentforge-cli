@@ -174,7 +174,8 @@ class WriteService {
     if (only && !gits.length) throw new ReadError(ERROR.NOT_FOUND, `No Git source called "${only}" is attached.`, 404);
     const lines = gits.map(r => ({ tone: 'change', text: fs.existsSync(cacheRootFor(this.paths, r)) ? `Update "${r.name}" from ${r.url_or_path}` : `Download "${r.name}" from ${r.url_or_path}` }));
     if (!gits.length) lines.push({ tone: 'note', text: 'No Git sources are attached. Folder sources are always read in place.' });
-    lines.push({ tone: 'note', text: 'The library does not change until it is rebuilt.' });
+    if (gits.length) lines.push({ tone: 'warn', text: 'Fetching can immediately change skill content already linked into the library, sets and projects, even before a rebuild.' });
+    lines.push({ tone: 'note', text: 'Rebuilding updates library membership and collision choices.' });
     return { title: only ? `Fetch updates for ${only}` : 'Fetch updates', lines, conflicts: [], ok: true, args: { name: only },
       run: () => {
         const results = fetchSources({ paths: this.paths, git: this.git, only });

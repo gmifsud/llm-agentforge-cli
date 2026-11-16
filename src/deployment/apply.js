@@ -58,12 +58,15 @@ function applyPlan(plan, { dryRun = false } = {}) {
           if (es.kind === 'directory') fs.rmSync(p, { recursive: true, force: true });
           else if (es.kind === 'link') removeLinkOnly(p);
         }
+        const copied = [];
         for (const name of a.entries) {
           const dest = path.join(a.destination, name);
           if (inspectDestination(dest).kind !== 'missing') { skipped.push({ kind: a.kind, destination: dest, reason: 'yours, not replaced' }); continue; }
           fs.cpSync(path.join(a.source, name), dest, { recursive: true, dereference: true });
+          copied.push(name);
         }
-        writeMarker(a.marker);
+        // The library fingerprint describes freshness; ownership includes only entries we actually copied.
+        writeMarker({ ...a.marker, data: { ...a.marker.data, names: copied } });
         break;
       }
 

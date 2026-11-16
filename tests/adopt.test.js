@@ -60,7 +60,7 @@ test('adopt keeps every file you own byte for byte, records only what it added, 
   assert.doesNotMatch(ignore, /\.claude\/skills/, 'your own committed skills are never hidden from git');
 });
 
-test('after adopting, a library change makes the copy stale and a refresh adds to it without touching yours', t => {
+test('after adopting, successive refreshes keep owner skills out of the managed record and preserve their bytes', t => {
   const w = world(t);
   const p = plan(w);
   applyPlan({ target: 'claude', actions: p.actions, conflicts: [], notes: [] });
@@ -78,6 +78,33 @@ test('after adopting, a library change makes the copy stale and a refresh adds t
   assert.deepEqual(contentSnapshot(path.join(w.folder, 'tdd')), tddBefore);
   assert.ok(fs.existsSync(path.join(w.folder, 'fresh-skill', 'SKILL.md')));
   assert.equal(copyState(path.join(w.project, '.claude'), w.library).state, 'fresh');
+  assert.deepEqual(readMarker(path.join(w.project, '.claude')).names, ['diagnose', 'fresh-skill', 'review']);
+
+  fs.appendFileSync(path.join(w.library, 'diagnose', 'SKILL.md'), 'second source change\n');
+  const again = newPlan(w.target, w.project);
+  planSkillsLink(again, { projectRoot: w.project, target: w.target, vaultRoot: w.library, copy: true });
+  applyPlan(again);
+  assert.deepEqual(contentSnapshot(path.join(w.folder, 'mine')), mineBefore);
+  assert.deepEqual(contentSnapshot(path.join(w.folder, 'tdd')), tddBefore);
+  assert.match(fs.readFileSync(path.join(w.folder, 'diagnose', 'SKILL.md'), 'utf8'), /second source change/);
+  assert.deepEqual(readMarker(path.join(w.project, '.claude')).names, ['diagnose', 'fresh-skill', 'review']);
+});
+
+test('a later library name that collides with an owner skill stays owner-owned across repeated refreshes', t => {
+  const w = world(t);
+  const p = plan(w);
+  applyPlan({ target: 'claude', actions: p.actions, conflicts: [], notes: [] });
+  const mineBefore = contentSnapshot(path.join(w.folder, 'mine'));
+  makeVault(w.root, 'library', ['mine']);
+
+  for (let i = 0; i < 2; i++) {
+    fs.appendFileSync(path.join(w.library, 'diagnose', 'SKILL.md'), `change ${i}\n`);
+    const refresh = newPlan(w.target, w.project);
+    planSkillsLink(refresh, { projectRoot: w.project, target: w.target, vaultRoot: w.library, copy: true });
+    applyPlan(refresh);
+    assert.deepEqual(contentSnapshot(path.join(w.folder, 'mine')), mineBefore);
+    assert.deepEqual(readMarker(path.join(w.project, '.claude')).names, ['diagnose', 'review']);
+  }
 });
 
 test('a name that appears between the preview and Apply is yours: it is not copied over and not recorded as ours', t => {

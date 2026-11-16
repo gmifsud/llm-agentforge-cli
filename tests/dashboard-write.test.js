@@ -229,6 +229,36 @@ test('one failing fetch or refused check does not cancel the others; any other f
   assert.deepEqual(stopped.map(r => r.status), ['refused', 'skipped']);
 });
 
+test('fetch warns that linked content changes immediately, including through a project and a set, without rebuilding', t => {
+  const f = fixture(t);
+  const cache = makeVault(path.join(f.homedir, '.agentforge', 'repos'), 'remote', ['example']);
+  const skill = path.join(cache, 'example', 'SKILL.md');
+  fs.writeFileSync(f.registry, JSON.stringify({ repositories: [{ name: 'remote', type: 'git', url_or_path: 'https://example.test/skills.git' }] }));
+  const git = { revision: () => 'abc1234', pull() { fs.appendFileSync(skill, 'new content from fetch\n'); } };
+  const svc = new WriteService({ ...f.options, git });
+  const projectId = svc.projects()[0].id;
+  const setup = apply(svc,
+    { kind: 'library.rebuild' },
+    { kind: 'set.save', args: { name: 'remote-only', rules: [{ type: 'source', value: 'remote' }] } },
+    { kind: 'project.wire', args: { projectId, targets: ['claude'], repoint: true, writeDocs: false } },
+    { kind: 'project.wire', args: { projectId, targets: ['codex'], repoint: true, writeDocs: false, set: 'remote-only' } });
+  assert.ok(setup.every(r => r.status === 'applied'), JSON.stringify(setup));
+  const consumers = [
+    path.join(f.homedir, '.agentforge', 'merged-skills', 'example', 'SKILL.md'),
+    path.join(f.project, '.claude', 'skills', 'example', 'SKILL.md'),
+    path.join(f.project, '.codex', 'skills', 'example', 'SKILL.md'),
+  ];
+  const beforeText = fs.readFileSync(skill, 'utf8');
+  const before = contentSnapshot(f.root);
+  const fetch = { kind: 'source.fetch', args: { name: 'remote' } };
+  const preview = ok(svc, fetch);
+  assert.ok(preview.lines.some(l => l.tone === 'warn' && /immediately change/i.test(l.text)), JSON.stringify(preview.lines));
+  assert.ok(preview.lines.some(l => /rebuild.*membership.*collision/i.test(l.text)));
+  assert.deepEqual(contentSnapshot(f.root), before, 'preview does not fetch or write');
+  assert.deepEqual(apply(svc, fetch).map(r => r.status), ['applied']);
+  for (const file of consumers) assert.equal(fs.readFileSync(file, 'utf8'), beforeText + 'new content from fetch\n');
+});
+
 test('the rebuild preview and the catalogue say which skills changed content since the last build, even when no link changed', t => {
   const f = fixture(t);
   const svc = new WriteService(f.options);

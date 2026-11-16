@@ -3,7 +3,7 @@ import { Store } from './store';
 import { pendingChecks } from './project-status';
 
 const TONE_LABEL: Record<string, string> = { add: 'Adds', remove: 'Removes', change: 'Changes', note: 'Note', warn: 'Check' };
-const STATUS_LABEL: Record<string, string> = { applied: 'Applied', refused: 'Refused', failed: 'Failed', skipped: 'Not run' };
+const STATUS_LABEL: Record<string, string> = { applied: 'Applied', refused: 'Refused', failed: 'Failed', skipped: 'Not run', uncertain: 'Outcome unknown' };
 
 @Component({ selector: 'af-tray', template: `
   @if (s.tray().length || s.results()) {
@@ -93,6 +93,8 @@ export class Tray {
     const results = this.s.results();
     if (results) {
       const applied = results.filter(r => r.status === 'applied').length;
+      const uncertain = results.filter(r => r.status === 'uncertain').length;
+      if (uncertain) return `${applied} confirmed applied; ${uncertain} ${uncertain === 1 ? 'outcome' : 'outcomes'} unknown`;
       return applied === results.length ? `Applied ${this.count(applied)}` : `${applied} of ${results.length} applied`;
     }
     const progress = this.s.applyProgress();

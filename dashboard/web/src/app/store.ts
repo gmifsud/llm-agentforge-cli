@@ -255,15 +255,15 @@ export class Store {
    * cannot be made does not cancel the others; any other step that cannot be made stops what follows.
    */
   async apply() {
-    if (this.applying() || this.blocked() || !this.tray().length) return;
+    if (this.applying() || this.results() || this.blocked() || !this.tray().length) return;
     const items = this.tray();
     const results: ChangeResult[] = [];
-    const notRun = (item: TrayItem, why: string): ChangeResult => ({ kind: item.change.kind, title: item.preview?.title || item.change.kind, status: 'skipped', lines: [], message: why });
+    const resultFor = (item: TrayItem, status: ChangeResult['status'], why: string): ChangeResult => ({ kind: item.change.kind, title: item.preview?.title || item.change.kind, status, lines: [], message: why });
     this.applying.set(true); this.applyError.set(''); this.applyProgress.set({ done: 0, total: items.length });
     let stopped = false;
     try {
       for (const [i, item] of items.entries()) {
-        if (stopped) { results.push(notRun(item, 'Not run because an earlier change did not apply.')); continue; }
+        if (stopped) { results.push(resultFor(item, 'skipped', 'Not run because an earlier change did not apply.')); continue; }
         const res = await this.post<ApplyResponse>('/changes/apply', { changes: [item.change] });
         const outcome = res.results[0];
         results.push(outcome);
@@ -272,8 +272,10 @@ export class Store {
       }
     } catch (e) {
       this.applyError.set(message(e));
-      // What already ran stays on record; the rest was never sent.
-      for (const item of items.slice(results.length)) results.push(notRun(item, 'Not run because the dashboard server stopped answering.'));
+      // Missing acknowledgement does not prove that the sent request did not apply.
+      const uncertain = items[results.length];
+      if (uncertain) results.push(resultFor(uncertain, 'uncertain', 'This change may have already applied, but its result was not received. Check the affected files or the agent\'s history before trying it again.'));
+      for (const item of items.slice(results.length)) results.push(resultFor(item, 'skipped', 'This change was not sent because the previous outcome is unknown.'));
     } finally { this.applying.set(false); this.applyProgress.set(null); }
     this.results.set(results);
     await this.refresh();

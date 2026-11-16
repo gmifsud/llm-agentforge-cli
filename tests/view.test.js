@@ -91,7 +91,7 @@ test('a pinned choice holds but is flagged when a candidate changes or a new one
   assert.ok(withNew.clashes[0].changed.includes('r2'), 'a candidate that did not exist when you chose counts as a change');
 });
 
-test('materializeView swaps atomically and leaves link targets untouched', (t) => {
+test('materializeView replaces a staged view and leaves link targets untouched', (t) => {
   const root = tempRoot(t);
   const v1 = makeVault(root, 'v1', ['a', 'b']);
   const v2 = makeVault(root, 'v2', ['b', 'c']);
@@ -106,6 +106,77 @@ test('materializeView swaps atomically and leaves link targets untouched', (t) =
   assert.ok(fs.existsSync(path.join(v1, 'b', 'SKILL.md')), 'old target intact');
   assert.equal(inspectDestination(path.join(view, 'b')).kind, 'link');
   assert.ok(!fs.existsSync(`${view}.old-${process.pid}`) && !fs.existsSync(`${view}.staging-${process.pid}`), 'no temp dirs left');
+});
+
+for (const relative of ['merged-skills', path.join('views', 'focus')]) {
+  test(`materializeView restores ${relative} after promotion failure, then permits a retry`, t => {
+    const root = tempRoot(t);
+    const v1 = makeVault(root, 'v1', ['a']);
+    const v2 = makeVault(root, 'v2', ['b']);
+    const view = path.join(root, relative);
+    const original = [{ name: 'a', absolutePath: path.join(v1, 'a') }];
+    const next = [{ name: 'b', absolutePath: path.join(v2, 'b') }];
+    materializeView(view, original);
+    const before = fs.readFileSync(path.join(view, 'a', 'SKILL.md'), 'utf8');
+    const rename = fs.renameSync;
+    let failPromotion = true;
+    t.mock.method(fs, 'renameSync', (from, to) => {
+      if (from === `${view}.staging-${process.pid}` && to === view && failPromotion) {
+        failPromotion = false;
+        throw Object.assign(new Error('promotion denied'), { code: 'EACCES' });
+      }
+      return rename(from, to);
+    });
+
+    assert.throws(() => materializeView(view, next), /promotion denied/);
+    assert.deepEqual(fs.readdirSync(view), ['a']);
+    assert.equal(fs.readFileSync(path.join(view, 'a', 'SKILL.md'), 'utf8'), before);
+    assert.equal(fs.existsSync(`${view}.old-${process.pid}`), false);
+    assert.equal(fs.existsSync(`${view}.staging-${process.pid}`), false);
+
+    assert.equal(materializeView(view, next).linked, 1);
+    assert.deepEqual(fs.readdirSync(view), ['b']);
+    assert.equal(fs.readFileSync(path.join(v1, 'a', 'SKILL.md'), 'utf8'), before);
+    assert.ok(fs.existsSync(path.join(v2, 'b', 'SKILL.md')));
+  });
+}
+
+test('materializeView preserves recovery paths and reports both failures when rollback also fails', t => {
+  const root = tempRoot(t);
+  const vault = makeVault(root, 'vault', ['a', 'b']);
+  const view = path.join(root, 'merged-skills');
+  materializeView(view, [{ name: 'a', absolutePath: path.join(vault, 'a') }]);
+  const old = `${view}.old-${process.pid}`, staging = `${view}.staging-${process.pid}`;
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to === view && [old, staging].includes(from)) throw new Error(from === old ? 'restore denied' : 'promotion denied');
+    return rename(from, to);
+  });
+  assert.throws(() => materializeView(view, [{ name: 'b', absolutePath: path.join(vault, 'b') }]), e => {
+    assert.equal(e.code, 'VIEW_RECOVERY_FAILED');
+    for (const text of ['promotion denied', 'restore denied', old, staging]) assert.ok(e.message.includes(text), e.message);
+    return true;
+  });
+  assert.ok(fs.existsSync(path.join(old, 'a', 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(staging, 'b', 'SKILL.md')));
+  assert.throws(() => materializeView(view, []), { code: 'VIEW_BACKUP' });
+  assert.ok(fs.existsSync(path.join(old, 'a', 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(staging, 'b', 'SKILL.md')));
+});
+
+test('materializeView refuses an existing backup without changing it or the live view', t => {
+  const root = tempRoot(t);
+  const vault = makeVault(root, 'vault', ['a']);
+  const view = path.join(root, 'merged-skills');
+  const entries = [{ name: 'a', absolutePath: path.join(vault, 'a') }];
+  materializeView(view, entries);
+  const backup = `${view}.old-${process.pid}`;
+  fs.mkdirSync(backup);
+  fs.writeFileSync(path.join(backup, 'keep.txt'), 'recovery data');
+  assert.throws(() => materializeView(view, entries), { code: 'VIEW_BACKUP' });
+  assert.equal(fs.readFileSync(path.join(backup, 'keep.txt'), 'utf8'), 'recovery data');
+  assert.ok(fs.existsSync(path.join(view, 'a', 'SKILL.md')));
+  assert.equal(fs.existsSync(`${view}.staging-${process.pid}`), false);
 });
 
 test('materializeView refuses a view containing a non-link entry (user data in the way)', (t) => {

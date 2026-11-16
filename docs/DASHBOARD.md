@@ -114,15 +114,21 @@ Nothing you click writes to disk directly. Each action adds one or more steps to
 2. Each step is checked against your folders and described in plain words: what will be written, linked, unlinked or deleted. Lines are colour-coded: green adds, red removes, orange changes, yellow needs your attention.
 3. If a step cannot be made, it says why, and *Apply* is disabled until you remove it. A step that only depends on an earlier queued step (wiring a project to a library a queued rebuild will create) is not treated as blocked.
 4. *Apply* runs the steps in order, one at a time, and shows how many are done. Each one is planned again against the disk immediately before it runs, so a preview that went out of date cannot be applied blindly. If a step is refused or fails, the steps after it are not run. The exception is a fetch or a check of an agent: one of those that fails never stops the others, so a repository that cannot be reached does not cancel the rest, and the library is still rebuilt from what is on disk. Steps run one request each so a long list of checks, each of which can take a while, stays inside the server's time limit.
-5. The sheet shows what actually happened for each step, then the page refreshes.
+5. The sheet shows each received result, then the page refreshes. If a response is lost, the sent step is **Outcome unknown**: it may already have applied. Later steps are **Not run** because they were not sent. Check the affected files or the agent's history before trying the uncertain step again; refreshing the page does not prove whether that operation completed. The sheet does not automatically retry it.
+
+**Fetch takes effect through live links.** Updating an existing Git source can immediately change skill content in the library, sets and linked projects, even before rebuilding. Rebuilding updates which skills are included and which source wins a clash.
+
+**Rebuild recovery.** A rebuild stages a complete view before replacing the live path. If promotion fails, it restores the previous view. If restoration also fails, the error names the preserved backup and staging paths; recover them before rebuilding again. The swap is not a crash-atomic transaction, and a library plus its sets are rebuilt separately.
+
+**Previously adopted copies.** Older versions could incorrectly record a personal skill as managed after a refresh. This fix prevents new ownership mistakes, but cannot infer the original owner from an already incorrect record. If that happened, compare `<agent>/.agentforge-skills.json` with your project history or backups before another refresh; lost content must be restored from those sources.
 
 | Action | What it does | What it never does |
 | :-- | :-- | :-- |
 | Attach a folder | Registers it in `repos.json`; reads it in place | Write into the folder |
 | Attach a Git URL | Registers it, then downloads it into `~/.agentforge/repos/<name>` | Run Git hooks or submodules |
-| Fetch updates | Fast-forwards Git sources | Change the library until it is rebuilt |
+| Fetch updates | Fast-forwards Git sources; linked skill content can change immediately | Rebuild the library or its sets |
 | Detach | Unregisters; deletes the downloaded copy of a Git source | Delete a folder source |
-| Rebuild the library | Rebuilds `~/.agentforge/merged-skills` in a staging folder and swaps it in | Leave a half-built library if it fails |
+| Rebuild the library | Stages `~/.agentforge/merged-skills`, replaces the live path, and restores the previous view if promotion fails | Edit a source skill; silently discard a backup when restoration fails |
 | Choose a winner | Saves `preferences` in `~/.agentforge/config.json`; `agentforge repo sync` honours it too | Rename or edit either skill |
 | Add / remove a project | Edits `~/.agentforge/projects.json` | Touch the project folder |
 | Wire agents | Writes missing instruction files, links `<agent>/skills` to the library, adds that link to `.gitignore` | Overwrite an existing instruction file, or merge into a folder linked elsewhere |

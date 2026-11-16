@@ -94,5 +94,6 @@ export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'l
 export interface Change { kind: ChangeKind; args?: Record<string, unknown> }
 export interface ChangeLine { tone: 'add' | 'remove' | 'change' | 'note' | 'warn'; text: string }
 export interface ChangePreview { kind: ChangeKind; title: string; lines: ChangeLine[]; conflicts: string[]; ok: boolean; args?: Record<string, unknown> }
-export interface ChangeResult { kind: ChangeKind; title: string; status: 'applied' | 'refused' | 'failed' | 'skipped'; lines: ChangeLine[]; message: string }
+/** uncertain: the client sent a change but did not receive its outcome; it may have applied. */
+export interface ChangeResult { kind: ChangeKind; title: string; status: 'applied' | 'refused' | 'failed' | 'skipped' | 'uncertain'; lines: ChangeLine[]; message: string }
 export interface ApplyResponse { results: ChangeResult[] }

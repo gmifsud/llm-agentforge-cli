@@ -131,6 +131,35 @@ test('narrow screen and 200% zoom reflow; keyboard focus returns to the list', a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test('a lost response after mutation is an unknown outcome; later changes are not sent or retried', async ({ page }) => {
+  await openMap(page);
+  const codex = path.join(f.project, '.codex', 'skills');
+  const originalTarget = fs.readlinkSync(codex);
+  await page.getByRole('button', { name: 'Rebuild the library' }).click();
+  await page.getByRole('button', { name: 'Repoint Codex in project to the library' }).click();
+  let sent = 0;
+  await page.route('**/api/v1/changes/apply', async route => {
+    sent++;
+    const response = await route.fetch();
+    expect(response.ok()).toBe(true);
+    expect((await response.json()).results[0].status).toBe('applied');
+    await route.abort('failed');  // The mutation completed; its acknowledgement never reaches the page.
+  });
+  await page.getByRole('button', { name: 'Apply 2 changes' }).click();
+  await expect(tray(page)).toContainText('Outcome unknown');
+  await expect(tray(page)).toContainText('1 outcome unknown');
+  await expect(tray(page)).toContainText('may have already applied');
+  await expect(tray(page)).toContainText('before trying it again');
+  const results = tray(page).locator('li.result');
+  await expect(results).toHaveCount(2);
+  await expect(results.nth(1)).toContainText('Not run');
+  await expect(results.nth(1)).toContainText('not sent');
+  expect(sent).toBe(1);
+  expect(fs.existsSync(path.join(f.homedir, '.agentforge', 'merged-skills', 'sql-review'))).toBe(true);
+  expect(fs.readlinkSync(codex)).toBe(originalTarget);
+  await expect(page.getByRole('button', { name: /^Apply \d+ changes?/ })).toHaveCount(0);
+});
+
 test('a name clash is reviewed side by side, and choosing a copy goes through the review sheet', async ({ page }) => {
   await openMap(page);
   const clashes = page.getByRole('article', { name: 'Same name, more than one source' });

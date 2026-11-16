@@ -130,7 +130,9 @@ agentforge repo remove x         # unregister; deletes the cached clone only (ne
 
 Skill discovery prefers `.claude-plugin/plugin.json`, falling back to a `SKILL.md` scan (depth 4). Every candidate must be a directory inside the source root, after resolving links, and contain `SKILL.md`. Links inside a source are not followed. The same rule applies to the vault.
 
-The merged view is rebuilt by staging a new directory of links and swapping it in, so a failure never leaves projects pointing at a half-built folder. If the view contains anything that is not a link, the rebuild refuses.
+The merged view is rebuilt by staging a complete directory of links before replacing the live path. If promotion fails, Agentforge restores the previous view. If restoring also fails, the error names the preserved backup and staging paths for recovery. This is not a crash-atomic transaction. If the view contains anything that is not a link, the rebuild refuses.
+
+The library and sets link directly to source folders. Fetching an existing Git source can immediately change content seen by linked projects, before a rebuild; rebuilding updates membership and collision choices.
 
 ## Configuration
 

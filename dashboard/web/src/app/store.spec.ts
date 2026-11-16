@@ -138,16 +138,20 @@ describe('client state', () => {
     expect(store.results()?.[1].message).toMatch(/earlier change did not apply/);
   });
 
-  it('if the server stops answering part way, what ran is kept and the rest is marked not run', async () => {
+  it('a lost apply response leaves that request uncertain, preserves acknowledged results and skips unsent steps', async () => {
     tray(['project.verify', { projectId: 'p1', target: 'claude' }], ['project.verify', { projectId: 'p2', target: 'claude' }], ['project.verify', { projectId: 'p3', target: 'claude' }]);
     const run = store.apply();
     http.expectOne('/api/v1/changes/apply').flush({ results: [result('project.verify', 'Check Claude Code in p1', 'applied')] });
     await settle();
     http.expectOne('/api/v1/changes/apply').flush({ error: { message: 'down' } }, { status: 503, statusText: 'Unavailable' });
     await refreshAfter(run);
-    expect(store.results()?.map(r => r.status)).toEqual(['applied', 'skipped', 'skipped']);
-    expect(store.results()?.[1].message).toMatch(/stopped answering/);
+    expect(store.results()?.map(r => r.status)).toEqual(['applied', 'uncertain', 'skipped']);
+    expect(store.results()?.[1].message).toMatch(/may have (already )?applied/i);
+    expect(store.results()?.[1].message).toMatch(/before.*try.*again/i);
+    expect(store.results()?.[2].message).toMatch(/not sent/i);
     expect(store.applyError()).not.toBe('');
+    await store.apply();
+    http.expectNone('/api/v1/changes/apply');
   });
 
   const src = (id: string, key: string, kind: 'primary' | 'local' = 'local') => ({ id, key, kind, name: key, location: key, root: key, state: 'available' as const, revision: null, count: 1, rejectionCount: 0, error: null });
