@@ -24,10 +24,8 @@ function createPaths({ homedir, platform = process.platform, scriptDir }) {
     viewsDir: path.join(agentforgeDir, 'views'),
     setAsideDir: path.join(agentforgeDir, 'set-aside'),
     templatesDir: scriptDir ? path.join(scriptDir, 'templates') : undefined,
-    defaultVaultRoot:
-      platform === 'win32'
-        ? 'D:\\Repos\\LLM\\llm-skill-vault\\skills'
-        : path.join(homedir, 'repos/LLM/llm-skill-vault/skills'),
+    // The same on every machine, and inside agentforge's own folder. A real vault is configured, not guessed.
+    defaultVaultRoot: path.join(agentforgeDir, 'vault'),
   });
 }
 
@@ -86,7 +84,7 @@ function atomicWrite(file, content) {
  *   2. AGENTFORGE_VAULT_ROOT
  *   3. config.json vaultRoot
  *   4. ~/.agentforge/merged-skills — only if a registry exists behind it
- *   5. platform default
+ *   5. ~/.agentforge/vault, with a warning that no vault is configured
  * Returns { root, origin, warnings[] }.
  */
 function resolveDeployRoot({ cliVault, env = {}, paths, config = {} }) {
@@ -98,6 +96,7 @@ function resolveDeployRoot({ cliVault, env = {}, paths, config = {} }) {
     if (fs.existsSync(paths.reposJson)) return { root: paths.mergedSkills, origin: 'merged-view', warnings };
     warnings.push(`ignoring ${paths.mergedSkills}: no ${path.basename(paths.reposJson)} behind it (orphaned view). Run "agentforge repo sync" or delete it.`);
   }
+  warnings.push(`no vault configured; using ${paths.defaultVaultRoot}. Set --vault, AGENTFORGE_VAULT_ROOT or "vaultRoot" in ${paths.configJson}.`);
   return { root: paths.defaultVaultRoot, origin: 'default', warnings };
 }
 

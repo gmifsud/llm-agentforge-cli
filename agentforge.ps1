@@ -12,7 +12,7 @@
 $ErrorActionPreference = 'Stop'
 $entry = Join-Path $PSScriptRoot 'src' 'cli' 'main.js'
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Host "agentforge: node was not found on PATH (Node.js 20+ is required)" -ForegroundColor Red
+    Write-Host "agentforge: node was not found on PATH (Node.js 22+ is required)" -ForegroundColor Red
     exit 1
 }
 & node $entry @args

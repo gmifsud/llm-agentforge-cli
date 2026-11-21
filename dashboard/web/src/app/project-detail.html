@@ -96,7 +96,7 @@
     <label class="inline"><input type="checkbox" [checked]="wireCopy()" (change)="wireCopy.set($any($event.target).checked)"> Copy the skills instead of linking</label>
     @if (wireCopy()) { <p class="fine">A copy does not follow later changes to the library.</p> }
     <div class="actions">
-      <button type="submit" class="primary" [disabled]="!wireTargets().size">Wire</button>
+      <button type="submit" class="primary" [disabled]="!wireTargets().size || s.changesLocked()">Wire</button>
       <button type="button" class="quiet" (click)="wiring.set(false)">Cancel</button>
     </div>
   </form>
@@ -109,5 +109,5 @@
     }
   </div>
 } @else if (report().project.origin === 'saved') {
-  <div class="actions"><button type="button" class="quiet" (click)="s.forgetProject(report().project.id)">Remove from list</button></div>
+  <div class="actions"><button type="button" class="quiet" (click)="s.forgetProject(report().project.id)" [disabled]="s.changesLocked()">Remove from list</button></div>
 }

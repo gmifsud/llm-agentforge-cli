@@ -21,7 +21,10 @@ test.afterEach(async () => {
   await app?.close(); for (const fn of cleanup) await fn();
 });
 
-const tray = page => page.locator('.tray');
+const tray = page => page.locator('dialog.tray:has(ol.steps)');
+async function openReview(page) {
+  if (!await page.locator('dialog.tray').evaluate(dialog => dialog.open)) await page.locator('#changes-control').click();
+}
 /** The wiring map draws one project at a time; these tests look at the fixture's single project. */
 async function openMap(page) {
   const res = await page.request.get(`${app.url}/api/v1/context`, { headers: { 'X-Agentforge-Read': '1' } });
@@ -30,6 +33,7 @@ async function openMap(page) {
   await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
 }
 async function applyAll(page, n) {
+  await openReview(page);
   const label = n === 1 ? 'Apply 1 change' : `Apply ${n} changes`;
   await expect(page.getByRole('button', { name: label })).toBeEnabled();
   await page.getByRole('button', { name: label }).click();
@@ -80,7 +84,9 @@ test('a change that cannot be made blocks Apply and says why', async ({ page }) 
   await page.getByRole('button', { name: 'Attach', exact: true }).click();
   await expect(tray(page)).toContainText('one needs attention');
   await expect(tray(page)).toContainText('does not exist');
+  await openReview(page);
   await expect(page.getByRole('button', { name: /^Apply/ })).toBeDisabled();
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
   await expect(tray(page)).toHaveCount(0);
 });
@@ -145,6 +151,7 @@ test('a lost response after mutation is an unknown outcome; later changes are no
     expect((await response.json()).results[0].status).toBe('applied');
     await route.abort('failed');  // The mutation completed; its acknowledgement never reaches the page.
   });
+  await openReview(page);
   await page.getByRole('button', { name: 'Apply 2 changes' }).click();
   await expect(tray(page)).toContainText('Outcome unknown');
   await expect(tray(page)).toContainText('1 outcome unknown');
@@ -231,6 +238,7 @@ test('Antigravity gets a copy; a stale copy says so and is refreshed without los
   await expect(project).toContainText('Antigravity does not follow links');
   await project.getByRole('button', { name: 'Wire', exact: true }).click();
   await expect(tray(page)).toContainText('Copy the library into .agents/skills');
+  await openReview(page);
   await page.getByRole('button', { name: 'Apply 1 change' }).click();
   await expect(tray(page)).toContainText('Antigravity: start a new session');
   await page.getByRole('button', { name: 'Done' }).click();
@@ -265,6 +273,7 @@ test('Verify previews what will be asked and runs no tool until applied', async 
   await page.getByRole('button', { name: 'Verify Codex in project' }).click();
   await expect(tray(page)).toContainText('Sends one short question to');
   await expect(tray(page)).toContainText('Nothing in the project changes');
+  await openReview(page);
   await expect(page.getByRole('button', { name: 'Apply 1 change' })).toBeEnabled();
   await expect(project).toContainText('Will be checked when you apply');
   await expect(page.getByRole('button', { name: 'Verify Codex in project' })).toHaveCount(0);
@@ -274,6 +283,7 @@ test('Verify previews what will be asked and runs no tool until applied', async 
   fs.mkdirSync(path.dirname(results), { recursive: true });
   const { skillsBasis, nameKey } = require('../../server/workspace');
   fs.writeFileSync(results, JSON.stringify({ [nameKey(path.resolve(f.project))]: { codex: { level: 'verified', tool: 'codex', detail: 'codex reported all 3 sampled skills', at: new Date().toISOString(), basis: skillsBasis(path.join(f.project, '.codex')) } } }));
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await expect(project).toContainText(/Verified \S/);   // followed by the time, in the reader's own date format
@@ -441,17 +451,21 @@ test('fleet: a source opens in the side panel with its actions; Escape returns f
   const before = contentSnapshot(f.root);
   await drawer.getByRole('button', { name: 'Fetch updates' }).click();
   await expect(drawer).toContainText('Will be fetched');
+  await openReview(page);
   await expect(tray(page)).toBeVisible();
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
   await drawer.getByRole('button', { name: 'Detach' }).click();
   await expect(tray(page)).toContainText('Detach team-skills');
   await expect(drawer).toContainText('Will be detached');
   expect(contentSnapshot(f.root)).toEqual(before);
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
 
   // The panel can move the source in the order, through the same review sheet.
   await drawer.getByRole('button', { name: 'Move team-skills up in the order' }).click();
   await expect(drawer).toContainText('Position 2 of 3');
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
 
   await drawer.getByRole('button', { name: 'Show its skills' }).click();
@@ -486,6 +500,7 @@ test('fleet: a project opens with its agents and actions, and every action goes 
   await drawer.getByRole('button', { name: 'Verify Codex in project' }).click();
   await expect(tray(page)).toContainText('Sends one short question to');
   await expect(drawer).toContainText('Will be checked when you apply');
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
 
   await drawer.getByRole('button', { name: 'Wire agents' }).click();
@@ -493,6 +508,7 @@ test('fleet: a project opens with its agents and actions, and every action goes 
   await drawer.getByRole('button', { name: 'Wire', exact: true }).click();
   await expect(tray(page)).toContainText('Link .gemini/skills to the library');
   await expect(drawer).toContainText('Will read the library');
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
   expect(fs.existsSync(path.join(f.project, '.gemini'))).toBe(false);
 });
@@ -580,6 +596,7 @@ test('fleet: ticking Git sources and choosing Fetch selected queues one fetch ea
 
   await page.getByRole('button', { name: 'Clear selection' }).click();
   await expect(page.getByLabel('Selection', { exact: true })).toHaveCount(0);
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
 });
 
@@ -623,10 +640,12 @@ test('fleet: a folder is ticked at once, Verify selected counts the agents it wo
     const steps = tray(page).locator('ol.steps > li.step');
     await expect(steps).toHaveCount(49);
     await expect(page.getByRole('button', { name: 'Verify selected (0 agents)' })).toBeDisabled();
+    await openReview(page);
     await expect(page.getByRole('button', { name: 'Apply 49 changes' })).toBeEnabled({ timeout: 60000 });
-
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Clear selection' }).click();
     await expect(bar).toHaveCount(0);
+    await openReview(page);
     await page.getByRole('button', { name: 'Discard all' }).click();
   } finally {
     outbound = outbound.filter(u => !u.startsWith(big.url));
@@ -680,6 +699,7 @@ test('wiring map: a folder of 38 projects is drawn ten at a time, and actions on
     await expect(card).toBeVisible();
     await card.getByRole('button', { name: 'Repoint Claude Code in project-088 to the library' }).click();
     await expect(tray(page)).toContainText('That folder is not touched');
+    await openReview(page);
     await page.getByRole('button', { name: 'Discard all' }).click();
   } finally {
     outbound = outbound.filter(u => !u.startsWith(big.url));
@@ -744,6 +764,7 @@ test('fleet: Fetch all updates queues every Git source and one rebuild; Check al
   await expect(tray(page)).toContainText('The exception is a fetch or a check');
   await expect(page.getByRole('button', { name: 'Fetch all updates (0)' })).toBeDisabled();
   expect(contentSnapshot(f.root)).toEqual(before);
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
 });
 
@@ -764,16 +785,20 @@ test('fleet: Check all agents asks for every working agent at once, and a rebuil
     await expect(tray(page)).toContainText('88 checks ask an agent');
     await expect(tray(page)).toContainText('Nothing runs until you press Apply');
     await expect(page.getByRole('button', { name: 'Check all agents (0)' })).toBeDisabled();
+    await openReview(page);
     await expect(page.getByRole('button', { name: 'Apply 88 changes' })).toBeEnabled({ timeout: 90000 });
+    await openReview(page);
     await page.getByRole('button', { name: 'Discard all' }).click();
 
     // A rebuild changes what those agents read, so it offers to check them; taking the offer adds them once.
     await page.getByRole('article', { name: 'Library' }).getByRole('button', { name: 'Rebuild the library' }).click();
     await expect(steps).toHaveCount(1);
     await expect(tray(page)).toContainText('Rebuilding the library changes what 88 agents read');
+    await openReview(page);
     await tray(page).getByRole('button', { name: 'Add 88 checks to this list' }).click();
     await expect(steps).toHaveCount(89);
     await expect(tray(page).getByRole('button', { name: /^Add \d+ checks/ })).toHaveCount(0);
+    await openReview(page);
     await page.getByRole('button', { name: 'Discard all' }).click();
   } finally {
     outbound = outbound.filter(u => !u.startsWith(big.url));
@@ -904,6 +929,7 @@ test('sets: build one in the editor with a live budget, refuse a rule that selec
   await page.getByLabel('Include sql-review').uncheck();
   await page.getByRole('button', { name: 'Save set' }).click();
   await expect(tray(page)).toContainText('Replace the rules of the set "ui": it will hold 2 skills');
+  await openReview(page);
   await page.getByRole('button', { name: 'Discard all' }).click();
   await page.goto(`${app.url}/sets/ui`);                                    // a deep link reloads
   await expect(page.getByRole('heading', { name: 'Set ui' })).toBeVisible();

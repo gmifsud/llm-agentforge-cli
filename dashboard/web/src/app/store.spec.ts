@@ -4,6 +4,7 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { provideRouter } from '@angular/router';
 import { Store, type Catalog } from './store';
 import { Library } from './library';
+import { CHANGES_PREFERENCE_KEY } from './changes-presentation';
 
 const library = { path: 'lib', built: true, builtAt: '', invalid: false, size: 1, add: [], remove: [], change: [], inSync: true };
 const catalog: Catalog = {
@@ -91,19 +92,68 @@ describe('client state', () => {
     tray(['source.attach', { location: 'D:\\x' }], ['library.rebuild']);
     const run = store.apply();
     expect(store.applyProgress()).toEqual({ done: 0, total: 2 });
+    expect(store.activeStep()).toBe(0);
     const first = http.expectOne('/api/v1/changes/apply');
     expect(first.request.body).toEqual({ changes: [{ kind: 'source.attach', args: { location: 'D:\\x' } }] });
     first.flush({ results: [result('source.attach', 'Attach x', 'applied')] });
     await settle();
     expect(store.applyProgress()).toEqual({ done: 1, total: 2 });
+    expect(store.results()).toBeNull();
+    expect(store.runSteps()[0].result?.status).toBe('applied');
+    expect(store.activeStep()).toBe(1);
+    expect(store.runSteps()[1].startedAt).not.toBeNull();
+    // Presentation and attempts to edit/acknowledge cannot alter an active run.
+    store.setTrayHidden(true);
+    store.remove(store.tray()[0].uid);
+    store.discard(); store.finish(); store.queue({ kind: 'project.add', args: { path: 'D:\\ignored' } });
+    expect(store.tray()).toHaveLength(2);
     const second = http.expectOne('/api/v1/changes/apply');
     expect(second.request.body).toEqual({ changes: [{ kind: 'library.rebuild' }] });
     second.flush({ results: [result('library.rebuild', 'Rebuild', 'applied')] });
     await refreshAfter(run);
     expect(store.results()?.map(r => r.status)).toEqual(['applied', 'applied']);
     expect(store.applyProgress()).toBeNull();
+    expect(store.activeStep()).toBeNull();
+    localStorage.removeItem(CHANGES_PREFERENCE_KEY);
     store.finish();
     expect(store.tray()).toEqual([]);
+  });
+
+  it('keeps hidden presentation during preview and enqueue without persisting requests', async () => {
+    store.setTrayHidden(true);
+    store.queue({ kind: 'library.rebuild' });
+    expect(store.trayOpen()).toBe(false);
+    http.expectOne('/api/v1/changes/preview').flush(ok('Rebuild'));
+    await settle();
+    store.queue({ kind: 'project.add', args: { path: 'D:\\fixture' } });
+    http.expectOne('/api/v1/changes/preview').flush(ok('Add fixture'));
+    await settle();
+    expect(store.trayHidden()).toBe(true);
+    expect(store.trayOpen()).toBe(false);
+    expect(localStorage.getItem(CHANGES_PREFERENCE_KEY)).toBe('hidden');
+    expect(store.tray()).toHaveLength(2);
+    store.setTrayHidden(false);
+    localStorage.removeItem(CHANGES_PREFERENCE_KEY);
+  });
+
+  it('requires Done before another batch and preserves prior results and queued source order', async () => {
+    tray(['library.rebuild']);
+    const run = store.apply();
+    http.expectOne('/api/v1/changes/apply').flush({ results: [result('library.rebuild', 'Rebuild', 'applied')] });
+    await refreshAfter(run);
+    const acknowledged = store.results();
+    store.queue({ kind: 'project.add', args: { path: 'D:\\fixture' } });
+    store.remove(store.tray()[0].uid); store.discard();
+    expect(store.results()).toBe(acknowledged);
+    expect(store.tray()).toHaveLength(1);
+    expect(store.trayOpen()).toBe(true);
+    http.expectNone('/api/v1/changes/preview');
+    store.finish();
+    store.queue({ kind: 'project.add', args: { path: 'D:\\fixture' } });
+    http.expectOne('/api/v1/changes/preview').flush(ok('Add fixture'));
+    await settle();
+    expect(store.tray()[0].change.kind).toBe('project.add');
+    expect(store.results()).toBeNull();
   });
 
   it('a fetch or a check that fails does not stop the ones after it; any other failure does', async () => {

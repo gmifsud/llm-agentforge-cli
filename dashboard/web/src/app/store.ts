@@ -1,6 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { savedChangesPreference, saveChangesPreference } from './changes-presentation';
 import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
 export type { Catalog, Context, Skill, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, DiffHunk, LintFinding } from '../../../contracts';
 
@@ -21,6 +22,7 @@ const INDEPENDENT = new Set<ChangeKind>(['source.fetch', 'project.verify']);
 
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
+export interface RunStep { item: TrayItem; startedAt: number | null; result: ChangeResult | null }
 
 /** Names people know the tools by. `generic` is the shared .agents folder that Codex, Gemini, Cursor and Antigravity all read. */
 export const AGENTS: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', generic: 'Shared .agents folder', gemini: 'Gemini CLI', cursor: 'Cursor', antigravity: 'Antigravity' };
@@ -47,6 +49,12 @@ export class Store {
   // Change tray
   tray = signal<TrayItem[]>([]);
   trayOpen = signal(false);
+  trayHidden = signal(savedChangesPreference() === 'hidden');
+  readonly hasChanges = computed(() => this.tray().length > 0 || this.results() !== null);
+  readonly changesLocked = computed(() => this.applying() || this.results() !== null);
+  /** Execution state is separate from the final result sheet and its acknowledgement guard. */
+  runSteps = signal<RunStep[]>([]);
+  activeStep = signal<number | null>(null);
   applying = signal(false);
   /** While applying: how many steps have finished, out of how many. */
   applyProgress = signal<{ done: number; total: number } | null>(null);
@@ -120,6 +128,8 @@ export class Store {
     return [...listed, ...c.sources.filter(s => !listed.includes(s))];
   });
   moveSource(source: Source, delta: -1 | 1) {
+    if (this.applying()) return;
+    if (this.changesLocked()) { this.trayOpen.set(true); return; }
     const order = this.orderedSources().map(s => s.key);
     const i = order.indexOf(source.key), j = i + delta;
     if (i < 0 || j < 0 || j >= order.length) return;
@@ -185,7 +195,7 @@ export class Store {
   /** Queue changes in pipeline order. Identical changes and repeated rebuilds collapse into one. */
   queue(...changes: Change[]) {
     if (this.applying()) return;
-    if (this.results()) { this.results.set(null); this.tray.set([]); }
+    if (this.results()) { this.trayOpen.set(true); return; }
     const items = [...this.tray()];
     for (const change of changes) {
       const key = JSON.stringify(change);
@@ -194,16 +204,22 @@ export class Store {
     }
     items.sort((a, b) => STAGE[a.change.kind] - STAGE[b.change.kind] || a.uid - b.uid);
     this.tray.set(this.markDeferred(items));
-    this.trayOpen.set(true);
     void this.previewPending();
   }
 
+  setTrayHidden(hidden: boolean) {
+    this.trayHidden.set(hidden);
+    saveChangesPreference(hidden ? 'hidden' : 'compact');
+    this.trayOpen.set(false);
+  }
+
   remove(uid: number) {
+    if (this.changesLocked()) return;
     const rest = this.tray().filter(i => i.uid !== uid);
     this.tray.set(this.markDeferred(rest));
     if (!rest.length) this.trayOpen.set(false);
   }
-  discard() { if (this.applying()) return; this.tray.set([]); this.results.set(null); this.applyError.set(''); this.trayOpen.set(false); }
+  discard() { if (this.changesLocked()) return; this.clearChanges(); }
 
   /** An item is checked "as of now"; mark those whose real effect depends on earlier, unapplied items. */
   private markDeferred(items: TrayItem[]) {
@@ -259,29 +275,40 @@ export class Store {
     const items = this.tray();
     const results: ChangeResult[] = [];
     const resultFor = (item: TrayItem, status: ChangeResult['status'], why: string): ChangeResult => ({ kind: item.change.kind, title: item.preview?.title || item.change.kind, status, lines: [], message: why });
+    this.runSteps.set(items.map(item => ({ item, startedAt: null, result: null })));
+    const record = (index: number, outcome: ChangeResult) => {
+      results.push(outcome);
+      this.runSteps.update(steps => steps.map((step, i) => i === index ? { ...step, result: outcome } : step));
+      this.applyProgress.set({ done: results.length, total: items.length });
+    };
     this.applying.set(true); this.applyError.set(''); this.applyProgress.set({ done: 0, total: items.length });
     let stopped = false;
     try {
       for (const [i, item] of items.entries()) {
-        if (stopped) { results.push(resultFor(item, 'skipped', 'Not run because an earlier change did not apply.')); continue; }
+        if (stopped) { record(i, resultFor(item, 'skipped', 'Not run because an earlier change did not apply.')); continue; }
+        this.activeStep.set(i);
+        this.runSteps.update(steps => steps.map((step, j) => j === i ? { ...step, startedAt: Date.now() } : step));
         const res = await this.post<ApplyResponse>('/changes/apply', { changes: [item.change] });
         const outcome = res.results[0];
-        results.push(outcome);
+        record(i, outcome);
         if (outcome.status !== 'applied' && !INDEPENDENT.has(item.change.kind)) stopped = true;
-        this.applyProgress.set({ done: i + 1, total: items.length });
       }
     } catch (e) {
       this.applyError.set(message(e));
       // Missing acknowledgement does not prove that the sent request did not apply.
       const uncertain = items[results.length];
-      if (uncertain) results.push(resultFor(uncertain, 'uncertain', 'This change may have already applied, but its result was not received. Check the affected files or the agent\'s history before trying it again.'));
-      for (const item of items.slice(results.length)) results.push(resultFor(item, 'skipped', 'This change was not sent because the previous outcome is unknown.'));
-    } finally { this.applying.set(false); this.applyProgress.set(null); }
+      if (uncertain) record(results.length, resultFor(uncertain, 'uncertain', 'This change may have already applied, but its result was not received. Check the affected files or the agent\'s history before trying it again.'));
+      for (const item of items.slice(results.length)) record(results.length, resultFor(item, 'skipped', 'This change was not sent because the previous outcome is unknown.'));
+    } finally { this.activeStep.set(null); this.applyProgress.set(null); }
     this.results.set(results);
+    this.applying.set(false);
     await this.refresh();
   }
 
-  finish() { this.results.set(null); this.tray.set([]); this.trayOpen.set(false); this.applyError.set(''); }
+  finish() { if (!this.applying()) this.clearChanges(); }
+  private clearChanges() {
+    this.results.set(null); this.tray.set([]); this.trayOpen.set(false); this.applyError.set(''); this.runSteps.set([]); this.activeStep.set(null);
+  }
 
   // ─── intents used by the board ─────────────────────────────────────────────
   attach(location: string, name: string, branch: string) {

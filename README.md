@@ -4,7 +4,7 @@
 
 **New here?** Read [docs/USER-GUIDE.md](docs/USER-GUIDE.md): concepts, a first-fifteen-minutes walkthrough, everyday jobs and what every refusal means.
 
-**Dashboard:** [docs/DASHBOARD.md](docs/DASHBOARD.md) covers the local app: one board showing sources, the library and every project's agents, where you attach repositories, rebuild the library, choose collision winners and wire projects, each change previewed before it is applied.
+**Dashboard:** [docs/DASHBOARD.md](docs/DASHBOARD.md) covers the local Fleet, Skills, Sets and scoped wiring views. Actions queue into a compact Changes summary; open its review modal before applying, hide it while browsing, and follow each step's progress and outcome. Hiding keeps the run alive in this tab; reloading does not recover it.
 
 ## Why
 
@@ -30,7 +30,7 @@ llm-agentforge-cli/
 └── scripts/archive-skills.ps1
 ```
 
-Requires Node.js 20+. No dependencies.
+Requires Node.js 22+. No dependencies.
 
 ## Targets
 
@@ -151,7 +151,7 @@ Vault root for `init` / `link` / `doctor`:
 2. `$env:AGENTFORGE_VAULT_ROOT`
 3. `config.json` → `vaultRoot`
 4. `~/.agentforge/merged-skills/` — only if `repos.json` exists beside it (an orphaned view is ignored with a warning)
-5. `D:\Repos\LLM\llm-skill-vault\skills` (Windows) or `~/repos/LLM/llm-skill-vault/skills` (Unix)
+5. `~/.agentforge/vault`, with a warning that no vault is configured
 
 Primary source for `repo sync` uses the same chain minus step 4; the view itself is refused as a source.
 

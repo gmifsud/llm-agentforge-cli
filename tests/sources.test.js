@@ -88,7 +88,10 @@ test('deploy root: an orphaned merged view (no repos.json) is ignored with a war
   fs.mkdirSync(paths.mergedSkills, { recursive: true });
   const r = resolveDeployRoot({ env: {}, paths, config: {} });
   assert.equal(r.origin, 'default');
-  assert.equal(r.warnings.length, 1);
+  assert.equal(r.root, path.join(paths.agentforgeDir, 'vault'));
+  assert.equal(r.warnings.length, 2);
+  assert.match(r.warnings[0], /orphaned view/);
+  assert.match(r.warnings[1], /no vault configured/);
   fs.writeFileSync(paths.reposJson, '{"repositories":[]}');
   assert.equal(resolveDeployRoot({ env: {}, paths, config: {} }).origin, 'merged-view');
   assert.equal(resolveDeployRoot({ env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: {} }).origin, 'env');

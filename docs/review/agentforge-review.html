@@ -1,0 +1,377 @@
+<title>Agentforge Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of an engineering review, with wide tables allowed to scroll on their own.
+   The palette borrows agentforge's own world: slate neutrals and its orange "your action" accent. */
+:root {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --well: #eef1f3;
+  --fg: #172027;
+  --muted: #56636e;
+  --rule: #d9dfe3;
+  --accent: #b9470f;
+  --accent-tint: #fbeadf;
+  --ok: #17784f;
+  --ok-tint: #e2f3ea;
+  --warn: #8a6300;
+  --warn-tint: #fbf1d6;
+  --bad: #b3261e;
+  --bad-tint: #fbe4e2;
+  --sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1316; --surface: #171c20; --well: #1f262b; --fg: #e8edf1; --muted: #9aa7b2; --rule: #2a3238;
+    --accent: #ff9345; --accent-tint: #2d1d10; --ok: #4cd6a0; --ok-tint: #12291f; --warn: #e8c04a; --warn-tint: #2b2410;
+    --bad: #ff7a7a; --bad-tint: #2e1517; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1316; --surface: #171c20; --well: #1f262b; --fg: #e8edf1; --muted: #9aa7b2; --rule: #2a3238;
+  --accent: #ff9345; --accent-tint: #2d1d10; --ok: #4cd6a0; --ok-tint: #12291f; --warn: #e8c04a; --warn-tint: #2b2410;
+  --bad: #ff7a7a; --bad-tint: #2e1517; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font: 15px/1.6 var(--sans);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 4rem;
+}
+.wrap { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 3rem; }
+h1, h2, h3 { line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); font-weight: 700; letter-spacing: -.02em; }
+h2 { font-size: 1.55rem; font-weight: 600; letter-spacing: -.01em; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: .86em; }
+code { background: var(--well); padding: .05em .35em; border-radius: 3px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+header.top { padding-block: 2.5rem 0; display: flex; flex-direction: column; gap: .9rem; }
+.eyebrow { font: 500 .78rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 1.08rem; color: var(--muted); }
+nav.toc { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .4rem; }
+nav.toc a { text-decoration: none; font-weight: 600; font-size: .9rem; padding: .35rem .8rem; border: 1px solid var(--rule); border-radius: 999px; background: var(--surface); color: var(--fg); }
+nav.toc a:hover { border-color: var(--accent); color: var(--accent); }
+
+section { display: flex; flex-direction: column; gap: 1.25rem; scroll-margin-top: 1rem; }
+.section-head { display: flex; flex-direction: column; gap: .5rem; border-top: 2px solid var(--fg); padding-top: 1rem; }
+
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+.verdict { background: var(--surface); border: 1px solid var(--rule); padding: 1.1rem 1.2rem; display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
+.verdict .grade { display: inline-flex; align-self: flex-start; font: 600 .78rem/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: .35rem .6rem; border-radius: 3px; }
+.grade.ok { background: var(--ok-tint); color: var(--ok); }
+.grade.warn { background: var(--warn-tint); color: var(--warn); }
+.verdict ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .3rem; }
+
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); }
+table { width: 100%; border-collapse: collapse; font-size: .92rem; min-width: 760px; }
+th { text-align: left; font: 600 .74rem/1.2 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: .7rem .8rem; border-bottom: 1px solid var(--rule); background: var(--well); }
+td { padding: .7rem .8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.item { min-width: 22rem; }
+td.item b { display: block; margin-bottom: .2rem; }
+.type { font: 500 .78rem/1 var(--mono); color: var(--muted); white-space: nowrap; }
+.score { display: flex; align-items: center; gap: .55rem; justify-content: flex-end; }
+.bar { width: 64px; height: 6px; background: var(--well); flex: none; }
+.bar span { display: block; height: 100%; background: var(--accent); }
+.score b { font-family: var(--mono); font-variant-numeric: tabular-nums; min-width: 1.6rem; text-align: right; }
+
+.phases { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+.phase { background: var(--surface); border: 1px solid var(--rule); border-top: 3px solid var(--accent); padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: .6rem; min-width: 0; }
+.phase .when { font: 500 .8rem/1 var(--mono); color: var(--muted); }
+.phase ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .4rem; font-size: .93rem; }
+
+.findings { display: flex; flex-direction: column; gap: .9rem; }
+.finding { background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--warn); padding: 1rem 1.15rem; display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: .2rem 1rem; }
+.finding.high { border-left-color: var(--bad); }
+.finding .id { font: 600 .85rem/1.6 var(--mono); color: var(--muted); grid-row: span 4; }
+.finding h3 { margin-bottom: .15rem; }
+.finding .label { font: 600 .72rem/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: .4rem; }
+.finding p + p { margin-top: .35rem; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.stat { background: var(--surface); padding: .9rem 1rem; display: flex; flex-direction: column; gap: .2rem; }
+.stat b { font: 600 1.5rem/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+.stat span { font-size: .86rem; color: var(--muted); }
+
+.swatches { display: flex; gap: 4px; align-items: center; }
+.sw { width: 18px; height: 18px; border: 1px solid var(--rule); flex: none; }
+
+pre.tree { margin: 0; background: var(--surface); border: 1px solid var(--rule); padding: 1rem 1.2rem; font: .85rem/1.6 var(--mono); overflow-x: auto; }
+ol.steps { margin: 0; padding-left: 1.3rem; display: flex; flex-direction: column; gap: .55rem; }
+.note { font-size: .9rem; color: var(--muted); }
+footer { font-size: .85rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 1rem; }
+
+@media (max-width: 560px) {
+  .finding { grid-template-columns: minmax(0, 1fr); }
+  .finding .id { grid-row: auto; }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">llm-agentforge-cli · review of 21 Nov 2026 · commit e9ebe49</span>
+    <h1>Agentforge review</h1>
+    <p class="lede">Two passes over the same repository: technical debt in the core and the dashboard server, then an audit of the dashboard's interface and its design tokens, done against the running app.</p>
+    <nav class="toc" aria-label="Sections">
+      <a href="#verdict">Verdict</a>
+      <a href="#debt">Technical debt</a>
+      <a href="#plan">Remediation plan</a>
+      <a href="#ui">Interface findings</a>
+      <a href="#tokens">Design tokens</a>
+      <a href="#migration">Token migration</a>
+    </nav>
+  </header>
+
+  <section id="verdict">
+    <div class="section-head"><span class="eyebrow">Summary</span><h2>Verdict</h2></div>
+    <div class="verdicts">
+      <div class="verdict">
+        <span class="grade ok">Architecture: solid</span>
+        <p>The core is cleanly layered (domain, application, infra, deployment) with a CLI that only formats. Planning only reads; applying re-checks every precondition before it acts. All 170 Node tests pass.</p>
+        <ul>
+          <li>Environment is injected, so the whole CLI runs against a temp home in tests.</li>
+          <li>Fails closed on a corrupt registry; git runs without a shell and with hooks off.</li>
+          <li>The dashboard server checks origin and headers, refuses network paths, and runs reads and writes in workers.</li>
+        </ul>
+      </div>
+      <div class="verdict">
+        <span class="grade warn">Interface: works, reads as noisy</span>
+        <p>The dashboard has a real colour vocabulary and good accessibility habits. What makes it feel off is how those colours are spent: the accent and the warning colour appear almost everywhere, and the Projects table is squeezed until words break mid-name.</p>
+        <ul>
+          <li>Orange means about nine different things.</li>
+          <li>Yellow is on nearly every project row, so it no longer stands out.</li>
+          <li>Spacing, radius and breakpoints have no scale; the single stylesheet has grown one feature at a time.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="debt">
+    <div class="section-head">
+      <span class="eyebrow">Part 1</span>
+      <h2>Technical debt, by priority</h2>
+      <p class="note">Priority = (Impact + Risk) × (6 − Effort), each scored 1–5. Highest first.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Item</th><th>Type</th><th class="num">I</th><th class="num">R</th><th class="num">E</th><th class="num">Priority</th></tr></thead>
+        <tbody>
+          <tr><td class="num">1</td><td class="item"><b>No CI</b>There is no <code>.github/</code>. The 170 Node tests, the Angular unit tests and the Playwright tests only run on your machine.</td><td class="type">Infrastructure</td><td class="num">3</td><td class="num">4</td><td class="num">1</td><td><div class="score"><div class="bar"><span style="width:100%"></span></div><b>35</b></div></td></tr>
+          <tr><td class="num">2</td><td class="item"><b>The dashboard parses the core's sentences</b><code>humanNote</code> and <code>humanConflict</code> in <code>dashboard/server/write-service.js</code> rewrite text from <code>plan.js</code> with regexes. Rewording a CLI message silently breaks the dashboard's translation or how it classifies a conflict.</td><td class="type">Architecture</td><td class="num">4</td><td class="num">4</td><td class="num">2</td><td><div class="score"><div class="bar"><span style="width:91%"></span></div><b>32</b></div></td></tr>
+          <tr><td class="num">3</td><td class="item"><b>A personal path is the default vault</b><code>D:\Repos\LLM\llm-skill-vault\skills</code> is hard-coded in <code>src/infra/paths.js</code>. On any other machine the tool falls back to a folder that does not exist.</td><td class="type">Code</td><td class="num">2</td><td class="num">3</td><td class="num">1</td><td><div class="score"><div class="bar"><span style="width:71%"></span></div><b>25</b></div></td></tr>
+          <tr><td class="num">4</td><td class="item"><b>The repo's own CLAUDE.md is a blank template</b>It is untracked and still says <code>Stack: &lt;fill in&gt;</code>, points at a non-existent <code>src/index.ts</code>, and has no build commands.</td><td class="type">Documentation</td><td class="num">3</td><td class="num">2</td><td class="num">1</td><td><div class="score"><div class="bar"><span style="width:71%"></span></div><b>25</b></div></td></tr>
+          <tr><td class="num">5</td><td class="item"><b>Core files written from the dashboard; constants copied</b><code>saveConfig</code> for the core's <code>config.json</code> lives in the dashboard. The copy-marker file name is retyped instead of imported. <code>nameKey</code> exists three times, <code>IS_WIN</code> twice.</td><td class="type">Architecture</td><td class="num">3</td><td class="num">3</td><td class="num">2</td><td><div class="score"><div class="bar"><span style="width:69%"></span></div><b>24</b></div></td></tr>
+          <tr><td class="num">6</td><td class="item"><b>The library is computed in six places</b>The same <code>computeView({…})</code> call appears twice in <code>sync.js</code> (where <code>syncView</code> repeats <code>computeLibrary</code>), three times in the write service and once in the read service. Set budget logic is also in both the CLI and the dashboard.</td><td class="type">Code</td><td class="num">3</td><td class="num">2</td><td class="num">2</td><td><div class="score"><div class="bar"><span style="width:57%"></span></div><b>20</b></div></td></tr>
+          <tr><td class="num">7</td><td class="item"><b>config.json is not checked when loaded</b>Unlike the registry, any object is accepted; a mistyped <code>preferences</code> or <code>sourcePriority</code> fails deep inside view building.</td><td class="type">Code</td><td class="num">2</td><td class="num">3</td><td class="num">2</td><td><div class="score"><div class="bar"><span style="width:57%"></span></div><b>20</b></div></td></tr>
+          <tr><td class="num">8</td><td class="item"><b>Path-safety checks live in the read service</b><code>localPath</code> and <code>contained</code> are imported from <code>read-service.js</code> by the write service, the HTTP layer and the launcher; write validation errors are raised as <code>ReadError</code>.</td><td class="type">Code</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td><div class="score"><div class="bar"><span style="width:57%"></span></div><b>20</b></div></td></tr>
+          <tr><td class="num">9</td><td class="item"><b>Node version mismatch</b>The root says <code>node &gt;=20</code>, but <code>npm test</code> passes a glob to <code>node --test</code>, which needs Node 21. The dashboard requires <code>^24.15</code>.</td><td class="type">Dependency</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td><div class="score"><div class="bar"><span style="width:57%"></span></div><b>20</b></div></td></tr>
+          <tr><td class="num">10</td><td class="item"><b>Lost updates between CLI and dashboard</b>Both read, modify and rewrite <code>config.json</code> and <code>verifications.json</code> with no version check. Atomic rename stops corruption, not a lost change.</td><td class="type">Architecture</td><td class="num">2</td><td class="num">3</td><td class="num">3</td><td><div class="score"><div class="bar"><span style="width:43%"></span></div><b>15</b></div></td></tr>
+          <tr><td class="num">11</td><td class="item"><b>No type checking on the JavaScript core</b><code>dashboard/contracts.d.ts</code> exists, but nothing checks the core against it. <code>// @ts-check</code> with <code>tsc --checkJs</code> would catch shape drift.</td><td class="type">Test</td><td class="num">3</td><td class="num">2</td><td class="num">3</td><td><div class="score"><div class="bar"><span style="width:43%"></span></div><b>15</b></div></td></tr>
+          <tr><td class="num">12</td><td class="item"><b>CLI marks skipped work as done</b><code>cmdProject</code> prints ✓ for every action even when some entries were skipped; <code>void applied</code> is dead code.</td><td class="type">Code</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td><div class="score"><div class="bar"><span style="width:29%"></span></div><b>10</b></div></td></tr>
+          <tr><td class="num">13</td><td class="item"><b>One large write service</b>528 lines and 15 change kinds behind dynamic dispatch. Fine today; split by kind when it reaches about 20.</td><td class="type">Code</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td><div class="score"><div class="bar"><span style="width:26%"></span></div><b>9</b></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Items 2, 5 and 6 share one cause: the dashboard became a second client of a core that was shaped for the CLI. In each case the fix moves the shared piece (codes, file ownership, the library computation) down into <code>src/</code>.</p>
+  </section>
+
+  <section id="plan">
+    <div class="section-head"><span class="eyebrow">Part 1</span><h2>Remediation plan</h2><p>Each phase fits alongside feature work.</p></div>
+    <div class="phases">
+      <div class="phase">
+        <span class="when">Phase 1 · under a day</span>
+        <h3>Quick wins</h3>
+        <ul>
+          <li>GitHub Actions on Windows and Ubuntu: <code>npm test</code>, then the dashboard tests (#1).</li>
+          <li>Raise <code>engines</code> to <code>&gt;=22</code> (#9).</li>
+          <li>Drop the personal default path; refuse with a clear "set --vault" message (#3).</li>
+          <li>Fill in and commit this repo's <code>CLAUDE.md</code> (#4).</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <span class="when">Phase 2 · 2–3 days</span>
+        <h3>Tighten the core–dashboard contract</h3>
+        <ul>
+          <li>Plans emit coded notes and conflicts, such as <code>DOC_EXISTS</code> and <code>LINK_ELSEWHERE</code>; each client words them (#2).</li>
+          <li>Move <code>saveConfig</code>, case folding and the marker name into <code>src/infra</code>; move path safety into <code>boundary.js</code> (#5, #8).</li>
+          <li>Check the shape of <code>config.json</code> when it is loaded, as the registry already is (#7).</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <span class="when">Phase 3 · as you touch the area</span>
+        <h3>Consolidate use cases</h3>
+        <ul>
+          <li>One entry point for computing the library; set budgets move into <code>application/sets</code> (#6).</li>
+          <li>Compare-and-swap on config and verification writes (#10).</li>
+          <li>Turn on <code>@ts-check</code>, starting with <code>domain</code> and <code>deployment</code> (#11).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="ui">
+    <div class="section-head">
+      <span class="eyebrow">Part 2</span>
+      <h2>Interface findings</h2>
+      <p>Observed in the built dashboard (Fleet, Skills and Sets pages) at 1440 × 900 and at a narrow pane, with a real workspace of 9 sources, 395 skills and 7 projects. The red stripe marks what most affects how the app feels.</p>
+    </div>
+    <div class="findings">
+      <article class="finding high">
+        <span class="id">U1</span>
+        <h3>Orange means too many things</h3>
+        <p><span class="label">Seen</span>The stylesheet says orange (<code>--planned</code>) means "your action". In practice it marks the active nav tab, selected table rows, pressed filter buttons, pressed chips, links, the focus ring, text selection, queued changes, ghost modules and "Why this matters".</p>
+        <p><span class="label">Effect</span>You cannot tell at a glance whether something is selected, queued for change, or just a link. The one colour meant to say "this will change" is spent on navigation.</p>
+        <p><span class="label">Fix</span>Keep orange for interactive things and queued changes (dashed for queued). Draw selection and the active tab in neutrals: a raised surface with an ink edge or an underline.</p>
+      </article>
+      <article class="finding high">
+        <span class="id">U2</span>
+        <h3>Yellow is on nearly every project row</h3>
+        <p><span class="label">Seen</span>Each project row shows a yellow multi-line status pill, several yellow agent chips and a "needs attention" badge on its folder group; the summary strip adds "6 projects need attention".</p>
+        <p><span class="label">Effect</span>When 6 of 7 projects are yellow, yellow stops pointing at anything. The page reads as a wall of warnings rather than a list of things to do.</p>
+        <p><span class="label">Fix</span>One status per row: the worst one, as a short pill. Agent chips stay neutral, with a small coloured dot only on the agent that has the problem. Keep the full sentence for the detail panel.</p>
+      </article>
+      <article class="finding high">
+        <span class="id">U3</span>
+        <h3>The Projects table is squeezed until words break</h3>
+        <p><span class="label">Seen</span>With both lists side by side, Projects gets 1.2 fractions of the width. Names break mid-word ("SFAPlusReactNativ / e"), status pills wrap to three lines, agent chips stack three rows deep, and short git hashes split ("c1c8a8 / c").</p>
+        <p><span class="label">Cause</span><code>td { overflow-wrap: anywhere }</code> in <code>styles.css</code> lets every cell break between any two letters, and the layout gives two dense tables the same row.</p>
+        <p><span class="label">Fix</span>Use <code>overflow-wrap: break-word</code> on cells and <code>white-space: nowrap</code> on hashes, pills and chips. Stack Sources above Projects by default, or summarise the chips as "4 agents · 2 need a copy".</p>
+      </article>
+      <article class="finding">
+        <span class="id">U4</span>
+        <h3>The library card has five actions and no clear first one</h3>
+        <p><span class="label">Seen</span>Show, Show and set aside, Create a set, Rebuild the library and Browse all skills use four different button styles (tiny quiet, quiet, quiet with two-line wrap, orange link). None is the primary.</p>
+        <p><span class="label">Fix</span>Make Rebuild the card's one primary action. Turn the problem rows into disclosure rows with the action on the right, all in one tiny style.</p>
+      </article>
+      <article class="finding">
+        <span class="id">U5</span>
+        <h3>The source mix bar uses greys nobody can tell apart</h3>
+        <p><span class="label">Seen</span>Nine sources are drawn with six shades of slate (<code>--mix-0</code> to <code>--mix-5</code>), so the legend cannot be matched to the bar, and sources after the sixth reuse a colour.</p>
+        <p><span class="label">Fix</span>Show the vault plus the two largest sources, then "6 others". Or drop the bar and list sources sorted by count.</p>
+      </article>
+      <article class="finding">
+        <span class="id">U6</span>
+        <h3>Eighteen Up and Down buttons on the Sources table</h3>
+        <p><span class="label">Fix</span>Add a "Change order" mode that shows the controls only while you reorder, or a drag handle that also works with the keyboard.</p>
+      </article>
+      <article class="finding">
+        <span class="id">U7</span>
+        <h3>Switching tabs during the first load shows an error</h3>
+        <p><span class="label">Seen</span>Moving between Fleet, Skills and Sets while the first read was running left a red "Another local read is running. Try again." banner and an empty page that only offers Refresh.</p>
+        <p><span class="label">Fix</span>Let the store reuse the read already running instead of starting a second one, and show a loading layout instead of an empty page.</p>
+      </article>
+      <article class="finding">
+        <span class="id">U8</span>
+        <h3>The same number differs between pages</h3>
+        <p><span class="label">Seen</span>Fleet says "About 120 of 395 descriptions fit". Sets says "About 120 of 370" for the whole library. Probably two different counts (skills against distinct descriptions), but the page does not say which.</p>
+        <p><span class="label">Fix</span>Use one count and one wording on both pages, or label the difference.</p>
+      </article>
+      <article class="finding">
+        <span class="id">U9</span>
+        <h3>A lot of small grey text</h3>
+        <p><span class="label">Seen</span>The base size is 14px, and 12px (<code>--s-1</code>) is used 24 times, mostly muted grey on near-black. Contrast passes, but the dense pages tire the eye.</p>
+        <p><span class="label">Fix</span>Raise the base to 15px and the smallest size to 13px. Keep muted grey for secondary labels only, not for sentences you need to read.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="tokens">
+    <div class="section-head">
+      <span class="eyebrow">Part 2</span>
+      <h2>Design tokens: what exists and what is missing</h2>
+      <p>The colour layer is better than most: tokens are named by meaning (<code>live</code>, <code>caution</code>, <code>fault</code>, <code>planned</code>), and each has a tint. Everything else is written out by hand.</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>1</b><span>stylesheet of 533 lines; no component has its own styles</span></div>
+      <div class="stat"><b>25</b><span>colour tokens, plus 5 colours written out by hand</span></div>
+      <div class="stat"><b>40+</b><span>distinct <code>rem</code> values for spacing, with no scale</span></div>
+      <div class="stat"><b>7</b><span>border radii: 0, 2, 3, 4, 12px, 999px and 50%</span></div>
+      <div class="stat"><b>4</b><span>breakpoints: 1080, 900 and 760 (container) and 640 (media)</span></div>
+      <div class="stat"><b>8</b><span>inline <code>style=</code> attributes in <code>sets.ts</code> and <code>set-editor.html</code></span></div>
+    </div>
+    <p class="note">The stylesheet repeats rules. <code>.segmented</code> and <code>.fleet tr.selected td</code> are each declared twice. Select boxes are styled three times. The 16px checkbox rule appears five times. <code>color-mix(var(--panel) 55%, var(--module))</code> is written three times and should be a token. The newest sections are labelled by task number (for example "T31"), which shows how the file grew.</p>
+
+    <h3>Primitive tokens (keep the values; give them names)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Category</th><th>Token</th><th>Value</th><th>Source today</th></tr></thead>
+        <tbody>
+          <tr><td>Slate</td><td class="mono">slate-950 … slate-100</td><td><div class="swatches"><span class="sw" style="background:#0c0f11"></span><span class="sw" style="background:#0f1316"></span><span class="sw" style="background:#171c20"></span><span class="sw" style="background:#1f262b"></span><span class="sw" style="background:#2a3238"></span><span class="sw" style="background:#4a5761"></span><span class="sw" style="background:#9aa7b2"></span><span class="sw" style="background:#e8edf1"></span></div></td><td><code>--field</code>, <code>--panel</code>, <code>--module</code>, <code>--raised</code>, <code>--rule</code>, <code>--rule-strong</code>, <code>--muted</code>, <code>--ink</code></td></tr>
+          <tr><td>Orange</td><td class="mono">orange-500 / 400 / 950</td><td><div class="swatches"><span class="sw" style="background:#ff9345"></span><span class="sw" style="background:#ffa966"></span><span class="sw" style="background:#2d1d10"></span></div></td><td><code>--planned</code>, the hover literal <code>#ffa966</code>, <code>--planned-tint</code></td></tr>
+          <tr><td>Green, yellow, red</td><td class="mono">green-400 · yellow-400 · red-400 (+ 950 tints)</td><td><div class="swatches"><span class="sw" style="background:#4cd6a0"></span><span class="sw" style="background:#e8c04a"></span><span class="sw" style="background:#ff7a7a"></span></div></td><td><code>--live</code>, <code>--caution</code>, <code>--fault</code></td></tr>
+          <tr><td>Space</td><td class="mono">space-1 … space-8</td><td class="mono">4 · 8 · 12 · 16 · 20 · 24 · 32 · 48 px</td><td>Replaces the 40+ hand-written <code>rem</code> values</td></tr>
+          <tr><td>Radius</td><td class="mono">radius-sm · radius-pill</td><td class="mono">3px · 999px</td><td>Replaces 0, 2, 4 and 12px (keep 50% for jacks)</td></tr>
+          <tr><td>Type</td><td class="mono">text-xs … text-xl</td><td class="mono">13 · 15 · 17 · 20 · 26 px</td><td>Today <code>--s-1</code> to <code>--s3</code> = 12, 13, 15, 19, 24; raise by one step</td></tr>
+          <tr><td>Breakpoint</td><td class="mono">bp-narrow · bp-medium</td><td class="mono">760 · 1080 px</td><td>Folds 900 into 1080 and 640 into 760</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Semantic tokens (one meaning each)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Token</th><th>Maps to</th><th>Use it for</th><th>Replaces</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">surface-page / surface-raised / surface-hover / surface-well / surface-banded</td><td class="mono">slate-900 / 800 / 750 / 950 / mix</td><td>Page, modules, hover, inputs, vault and group rows</td><td><code>--panel</code>, <code>--module</code>, <code>--raised</code>, <code>--field</code>, the three <code>color-mix</code> calls</td></tr>
+          <tr><td class="mono">text-primary / text-secondary / text-on-accent</td><td class="mono">slate-100 / slate-400 / orange-ink</td><td>Body text, labels, text on an orange fill</td><td><code>--ink</code>, <code>--muted</code>, <code>--on-accent</code></td></tr>
+          <tr><td class="mono">border-subtle / border-strong</td><td class="mono">slate-700 / slate-600</td><td>Hairlines and control outlines</td><td><code>--rule</code>, <code>--rule-strong</code></td></tr>
+          <tr><td class="mono">interactive / interactive-hover / focus-ring</td><td class="mono">orange-500 / orange-400 / orange-500</td><td>Buttons, links, focus</td><td>Part of <code>--planned</code>; the <code>#ffa966</code> literal</td></tr>
+          <tr><td class="mono">pending / pending-tint</td><td class="mono">orange-500 / orange-950</td><td><b>Only</b> queued changes, ghost rows, the change tray</td><td>The other half of <code>--planned</code></td></tr>
+          <tr><td class="mono">selected-bg / selected-edge</td><td class="mono">slate-750 / slate-100</td><td>Selected rows, active tab, pressed filters (new and neutral; fixes U1)</td><td>Today drawn with <code>--planned-tint</code></td></tr>
+          <tr><td class="mono">status-ok / status-warn / status-error (+ tint)</td><td class="mono">green / yellow / red</td><td>State only, one per row (fixes U2)</td><td><code>--live</code>, <code>--caution</code>, <code>--fault</code></td></tr>
+          <tr><td class="mono">overlay-scrim / shadow-dialog</td><td class="mono">black at 67% / 0 16px 80px black at 56%</td><td>The review dialog</td><td>The <code>#000a</code> and <code>#0009</code> literals</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Component tokens (the few that repeat)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Tokens</th><th>Why it needs them</th></tr></thead>
+        <tbody>
+          <tr><td>Button</td><td class="mono">button-primary-bg, button-quiet-border, button-pad, button-pad-tiny, button-radius</td><td><code>button</code> and <code>a.button</code> repeat the same padding and border separately</td></tr>
+          <tr><td>Surface</td><td class="mono">panel-bg, panel-border, panel-pad</td><td><code>.module</code>, <code>.list</code>, <code>.inspector</code>, <code>.card</code>, <code>.findings</code> and <code>.choosebox</code> each set their own padding: 1rem, 1.1rem, .7rem .8rem, .8rem</td></tr>
+          <tr><td>Pill / chip</td><td class="mono">pill-radius, pill-pad, chip-radius</td><td><code>.pill</code> uses 12px, <code>.chip</code> 999px, <code>.agent-chip</code> 3px</td></tr>
+          <tr><td>Control</td><td class="mono">control-pad, control-border, control-bg, check-size</td><td>Inputs and selects are styled three times; the checkbox rule five times</td></tr>
+          <tr><td>Table</td><td class="mono">cell-pad, row-selected-bg, row-hover-bg</td><td>Cells use .4rem .5rem, .45rem .5rem and .55rem .6rem in different tables</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Themes</h3>
+    <p>The app is dark-only by choice, and the stylesheet says so. Keep that, but define every colour through the semantic layer so a light theme becomes a second block of values instead of a rewrite. Add a <code>@media (forced-colors: active)</code> block so the cables, jacks and status pills keep a visible outline in Windows High Contrast. A cross-platform token pipeline such as Style Dictionary is not worth it here: there is one web client, so plain CSS custom properties are the source of truth.</p>
+  </section>
+
+  <section id="migration">
+    <div class="section-head"><span class="eyebrow">Part 2</span><h2>Token migration plan</h2><p>No big-bang rewrite. Each step ships on its own and is covered by the existing Playwright tests, which already check text-colour contrast pairs.</p></div>
+    <pre class="tree">dashboard/web/src/
+  styles.css              ← becomes a list of @imports
+  styles/
+    tokens.primitives.css slate, orange, status ramps; space, radius, type, breakpoints
+    tokens.semantic.css   surface-*, text-*, interactive, pending, selected, status-*
+    base.css              reset, typography, focus, links
+    controls.css          button, a.button, input, select, checkbox, segmented, chip, pill
+    layout.css            masthead, main, bay, split, fleet-shell, drawer
+    tables.css            table, row states, group rows
+    tray.css              change strip and review dialog
+  app/*.ts                inline style= attributes move to classes</pre>
+    <ol class="steps">
+      <li><b>Name what exists.</b> Add the primitive and semantic layers with today's values, so nothing changes on screen. Replace the five hand-written colours and the three <code>color-mix</code> calls.</li>
+      <li><b>Split <code>--planned</code>.</b> Introduce <code>interactive</code>, <code>pending</code> and the neutral <code>selected-*</code> tokens, then move the nav, rows, filters and chips to <code>selected-*</code>. This is the change you will notice most (U1).</li>
+      <li><b>One status per row.</b> Rework the project rows and agent chips around the worst status, and fix the cell wrapping (U2, U3). Change <code>td</code> to <code>overflow-wrap: break-word</code>.</li>
+      <li><b>Space, radius and type scales.</b> Replace the <code>rem</code> literals section by section, collapse radii to two, raise the type scale by one step (U9).</li>
+      <li><b>Split the file</b> into the folders above, and remove the duplicate rules and inline styles as each part moves.</li>
+      <li><b>Component fixes:</b> one primary action on the library card (U4), the mix bar (U5), a reorder mode (U6), reuse of the running read (U7), one skill count (U8).</li>
+    </ol>
+  </section>
+
+  <footer>Prepared from a read of the source at commit e9ebe49 and a session with the built dashboard on 21 Nov 2026. The test suite passed: 170 of 170.</footer>
+</div>

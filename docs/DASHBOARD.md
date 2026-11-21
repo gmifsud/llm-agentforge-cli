@@ -4,7 +4,7 @@ The dashboard is the interactive way to use Agentforge. It shows where your skil
 
 ## Start it
 
-Requires Node.js 24.15 or newer for the Angular build. The CLI itself still runs on Node 20.
+Requires Node.js 24.15 or newer for the Angular build. The CLI itself runs on Node 22 or newer.
 
 ```powershell
 Set-Location D:\Repos\LLM\llm-agentforge-cli
@@ -108,13 +108,15 @@ A project whose `.claude/skills` (or another agent's) is an ordinary folder that
 
 ## How changes work
 
-Nothing you click writes to disk directly. Each action adds one or more steps to the **review sheet** at the bottom of the screen:
+Nothing you click writes to disk directly. Each action adds one or more steps to **Changes**. A compact summary appears at the bottom; **Review changes** or the header's **Changes** control opens the review modal. Queuing another action does not open it automatically.
 
-1. Click an action, for example *Attach a repository*. The sheet opens with the steps it needs, in pipeline order: sources first, then the library, then projects. Attaching a folder, for instance, queues *Attach* and *Rebuild the library*, because attached skills only reach your agents through the library.
+**Collapse**, **Close** or Escape returns to the compact summary. **Hide** removes that summary and leaves Changes in the header. Both preserve pending work, outcomes and active execution. The compact/hidden preference is remembered when browser storage is available; queued operations and results are held only in this tab's memory. Hiding is safe during execution, but reloading or closing the browser can interrupt the batch and lose its results. The dashboard requests the browser's normal unload warning during a run; it cannot recover a run after reload.
+
+1. Click an action, for example *Attach a repository*, then open Changes to review it. Steps appear in one ordered list: sources first, then the library, then projects. Attaching a folder, for instance, queues *Attach* and *Rebuild the library*, because attached skills only reach your agents through the library. Expand a step's **Details** for the complete preview; conflicts remain visible without expansion.
 2. Each step is checked against your folders and described in plain words: what will be written, linked, unlinked or deleted. Lines are colour-coded: green adds, red removes, orange changes, yellow needs your attention.
 3. If a step cannot be made, it says why, and *Apply* is disabled until you remove it. A step that only depends on an earlier queued step (wiring a project to a library a queued rebuild will create) is not treated as blocked.
 4. *Apply* runs the steps in order, one at a time, and shows how many are done. Each one is planned again against the disk immediately before it runs, so a preview that went out of date cannot be applied blindly. If a step is refused or fails, the steps after it are not run. The exception is a fetch or a check of an agent: one of those that fails never stops the others, so a repository that cannot be reached does not cancel the rest, and the library is still rebuilt from what is on disk. Steps run one request each so a long list of checks, each of which can take a while, stays inside the server's time limit.
-5. The sheet shows each received result, then the page refreshes. If a response is lost, the sent step is **Outcome unknown**: it may already have applied. Later steps are **Not run** because they were not sent. Check the affected files or the agent's history before trying the uncertain step again; refreshing the page does not prove whether that operation completed. The sheet does not automatically retry it.
+5. During execution each step shows Pending, Running with elapsed time, or its received outcome immediately, so earlier results remain readable while later steps run. At completion the catalogue refreshes. If a response is lost, the sent step is **Outcome unknown**: it may already have applied. Later steps are **Not run** because they were not sent. Check the affected files or the agent's history before trying the uncertain step again; refreshing the page does not prove whether that operation completed. The dashboard never automatically retries it. Close/reopen preserves the result sheet; choose **Done** to acknowledge it before starting another batch. Done does not resolve an unknown outcome or certify an agent's verification.
 
 **Fetch takes effect through live links.** Updating an existing Git source can immediately change skill content in the library, sets and linked projects, even before rebuilding. Rebuilding updates which skills are included and which source wins a clash.
 

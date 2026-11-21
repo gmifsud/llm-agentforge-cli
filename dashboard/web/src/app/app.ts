@@ -17,9 +17,10 @@ import { Tray } from './tray';
       @if (s.busy()) { Reading your folders… }
       @else if (s.catalog(); as c) { Checked at {{ c.completedAt | date:'shortTime' }} }
     </p>
+    <button id="changes-control" type="button" class="quiet" (click)="changes.open()" aria-haspopup="dialog">Changes · {{ s.tray().length }}@if (s.applying()) { · Running }@else if (s.results()) { · Results }</button>
     <button type="button" class="quiet" (click)="s.refresh()" [disabled]="s.busy() || s.applying()">Refresh</button>
   </header>
-  <main id="main" tabindex="-1" [class.with-tray]="s.tray().length || s.results()" [class.tray-open]="s.trayOpen()">
+  <main id="main" tabindex="-1" [class.with-tray]="s.hasChanges() && !s.trayHidden()">
     @if (s.error()) {
       <div class="notice fault" role="alert">{{ s.error() }} @if (s.catalog()) { <strong>What you see may be out of date.</strong> }</div>
     }
@@ -28,7 +29,7 @@ import { Tray } from './tray';
     }
     <router-outlet />
   </main>
-  <af-tray />
+  <af-tray #changes />
 ` })
 export class App implements OnInit {
   s = inject(Store);

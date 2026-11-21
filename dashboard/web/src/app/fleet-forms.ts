@@ -18,19 +18,20 @@ import { isGitLocation, suggestName } from './source-status';
     }
     <p class="fine">{{ isGit() ? 'It is downloaded, then the library is rebuilt to include it.' : 'The folder is read in place, then the library is rebuilt to include it.' }}</p>
     <div class="actions">
-      <button type="submit" class="primary" [disabled]="!location().trim()">Attach</button>
+      <button type="submit" class="primary" [disabled]="!location().trim() || s.changesLocked()">Attach</button>
       <button type="button" class="quiet" (click)="done.emit()">Cancel</button>
     </div>
   </form>
 ` })
 export class AttachForm {
-  private s = inject(Store);
+  s = inject(Store);
   done = output<void>();
   location = signal(''); name = signal(''); branch = signal('');
   isGit = computed(() => isGitLocation(this.location()));
   suggested = computed(() => suggestName(this.location()));
   submit(event: Event) {
     event.preventDefault();
+    if (this.s.changesLocked()) return;
     const location = this.location().trim(); if (!location) return;
     this.s.attach(location, this.name().trim(), this.branch().trim());
     this.done.emit();
@@ -46,17 +47,18 @@ export class AttachForm {
            [value]="path()" (input)="path.set($any($event.target).value)" required>
     <p class="fine">Nothing in the folder changes until you wire it.</p>
     <div class="actions">
-      <button type="submit" class="primary" [disabled]="!path().trim()">Add</button>
+      <button type="submit" class="primary" [disabled]="!path().trim() || s.changesLocked()">Add</button>
       <button type="button" class="quiet" (click)="done.emit()">Cancel</button>
     </div>
   </form>
 ` })
 export class ProjectForm {
-  private s = inject(Store);
+  s = inject(Store);
   done = output<void>();
   path = signal('');
   submit(event: Event) {
     event.preventDefault();
+    if (this.s.changesLocked()) return;
     const p = this.path().trim(); if (!p) return;
     this.s.addProject(p);
     this.done.emit();

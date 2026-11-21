@@ -97,6 +97,7 @@ export class ProjectDetail {
   toggleTarget(id: string, on: boolean) { const next = new Set(this.wireTargets()); if (on) next.add(id); else next.delete(id); this.wireTargets.set(next); }
   submitWire(event: Event) {
     event.preventDefault();
+    if (this.s.changesLocked()) return;
     const targets = this.agentIds.filter(id => this.wireTargets().has(id)); if (!targets.length) return;
     this.s.wire(this.id(), targets, { writeDocs: this.wireDocs(), link: this.wireCopy() ? 'copy' : 'auto' });
     this.wiring.set(false);

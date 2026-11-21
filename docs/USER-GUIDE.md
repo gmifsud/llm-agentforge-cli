@@ -32,7 +32,7 @@ A **project** is any folder you point Agentforge at. Wiring a project means: ins
 
 ## 3. Install
 
-Requirements: Node.js 20 or newer, git on `PATH`. No `npm install` is needed; the tool has no dependencies.
+Requirements: Node.js 22 or newer, git on `PATH`. No `npm install` is needed; the tool has no dependencies.
 
 **Windows (PowerShell).** Add this line to your `$PROFILE` and restart the shell:
 

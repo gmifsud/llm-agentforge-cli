@@ -7,7 +7,7 @@ const path = require('node:path');
 const { TARGETS } = require('../src/domain/targets');
 const { newPlan, planSkillsLink, planGitignore, planDoc } = require('../src/deployment/plan');
 const { applyPlan } = require('../src/deployment/apply');
-const { inspectDestination } = require('../src/infra/fs-inspect');
+const { inspectDestination, removeLinkOnly } = require('../src/infra/fs-inspect');
 const { tempRoot, makeVault, mkLink, snapshot, IS_WIN } = require('./helpers');
 
 const claude = TARGETS.claude;
@@ -125,7 +125,7 @@ test('remove-link refuses when the link now points elsewhere', (t) => {
   const link = path.join(project, '.claude', 'skills');
   mkLink(v1, link);
   const plan = planLink(project, v2, { force: true });
-  fs.rmdirSync(link); mkLink(v3, link); // repointed behind our back
+  removeLinkOnly(link); mkLink(v3, link); // repointed behind our back
   assert.throws(() => applyPlan(plan), { code: 'STALE_PLAN' });
   assert.ok(fs.existsSync(path.join(v3, 'a')));
 });

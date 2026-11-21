@@ -1,0 +1,78 @@
+@if (s.hasChanges() && !s.trayHidden()) {
+  <aside class="changes-strip" aria-label="Pending changes">
+    <div class="tray-bar">
+      <span class="changes-summary">{{ heading() }}</span>
+      <button type="button" class="quiet" (click)="open()">{{ s.applying() ? 'View progress' : 'Review changes' }}</button>
+      <button type="button" class="quiet" (click)="s.setTrayHidden(true)">Hide</button>
+    </div>
+  </aside>
+}
+<dialog #review class="tray" aria-labelledby="review-title" aria-describedby="review-help" (cancel)="close($event)" (close)="closed()" (keydown)="trapFocus($event)">
+  <header class="review-head">
+    <div><h2 id="review-title" tabindex="-1">Review changes</h2><p>{{ heading() }}</p></div>
+    <div class="tray-actions">
+      <button type="button" class="quiet" (click)="collapse()">Collapse</button>
+      <button type="button" class="quiet" (click)="hide()">Hide</button>
+      <button type="button" class="quiet" (click)="close()">Close</button>
+    </div>
+  </header>
+  <div class="tray-body" id="tray-body">
+    <p id="review-help" class="fine">Close or Hide keeps your changes. Execution stays in this tab: do not reload or close the browser while applying.</p>
+    @if (!s.hasChanges()) {
+      <p class="empty">No changes queued. Choose an action in Fleet, Sets or Skills, then return here to review it.</p>
+    } @else {
+      <p class="review-counts">{{ operations() }} {{ operations() === 1 ? 'workspace operation' : 'workspace operations' }} · {{ checks() }} agent {{ checks() === 1 ? 'check' : 'checks' }}</p>
+      @if (s.applyError()) { <p class="notice fault" role="alert">{{ s.applyError() }}</p> }
+      @if (!s.results() && checks()) {
+        <p class="notice">{{ checks() }} {{ checks() === 1 ? 'check asks' : 'checks ask' }} an agent's own tool whether it sees the skills. Most send one short question, on your account. Nothing runs until you press Apply, and each check runs on its own, so one that cannot be made does not stop the rest.</p>
+      }
+      @if (!s.results() && !s.applying() && offer().length; as n) {
+        <div class="offer">
+          <p>Rebuilding the library changes what {{ n }} {{ n === 1 ? 'agent reads' : 'agents read' }}. Check {{ n === 1 ? 'it' : 'them' }} afterwards?</p>
+          <button type="button" class="quiet tiny" (click)="s.verifyMany(offer())">Add {{ n === 1 ? '1 check' : n + ' checks' }} to this list</button>
+        </div>
+      }
+      @if (s.results()) { <p class="fine">Choose Done to acknowledge these results before queuing another batch. Done does not resolve an unknown outcome.</p> }
+      <ol class="steps">
+        @for (row of rows(); track row.item.uid; let i = $index) {
+          <li class="step" [class.result]="!!row.result" [class.running]="s.applying() && s.activeStep() === i" [class.blocked]="!row.result && !s.itemReady(row.item) && !!(row.item.preview || row.item.error)">
+            <div class="step-heading">
+              <h3>{{ row.result?.title || row.item.preview?.title || 'Checking…' }}</h3>
+              <span class="status" [class]="'status ' + (row.result?.status || '')">{{ row.result ? status[row.result.status] : s.applying() ? (s.activeStep() === i ? 'Running' : 'Pending') : s.itemReady(row.item) ? 'Ready' : s.checking() && !row.item.preview ? 'Checking' : 'Needs attention' }}</span>
+              @if (s.applying() && s.activeStep() === i) { <span class="fine elapsed" aria-hidden="true">{{ elapsed(row.startedAt) }}</span> }
+            </div>
+            @if (row.result?.message) { <p class="message">{{ row.result!.message }}</p> }
+            @if (row.item.error) { <p class="message fault">{{ row.item.error }}</p> }
+            @if (!row.result && !s.itemReady(row.item)) {
+              @for (conflict of row.item.preview?.conflicts || []; track $index) { <p class="message fault">{{ conflict }}</p> }
+            }
+            <details [open]="!!row.result && row.result.status !== 'applied'">
+              <summary>Details<span class="sr"> for step {{ i + 1 }}</span></summary>
+              @if (row.result; as result) {
+                <ul class="lines">@for (line of result.lines; track $index) { <li [class]="line.tone"><span class="sr">{{ tone[line.tone] }}: </span>{{ line.text }}</li> }</ul>
+              } @else if (row.item.preview; as preview) {
+                @if (row.item.deferred && row.item.change.kind === 'library.rebuild') {
+                  <p class="deferred">Rebuilds the library with the changes above, so your wired projects get them. The exact list appears in the result.</p>
+                } @else {
+                  @if (row.item.deferred) { <p class="deferred">Checked again after the steps above run, so the details may change.</p> }
+                  <ul class="lines">@for (line of preview.lines; track $index) { <li [class]="line.tone"><span class="sr">{{ tone[line.tone] }}: </span>{{ line.text }}</li> }</ul>
+                }
+              }
+            </details>
+            @if (!s.changesLocked()) { <button type="button" class="quiet tiny" (click)="s.remove(row.item.uid)">Remove<span class="sr"> step {{ i + 1 }}</span></button> }
+          </li>
+        }
+      </ol>
+      <p class="fine">Changes run in this order, one at a time. Each one is checked against your folders again just before it runs. If one cannot be made, the ones after it are not run. The exception is a fetch or a check: one of those that fails never stops the others.</p>
+    }
+  </div>
+  <footer class="review-footer">
+    <p role="status" aria-live="polite" aria-atomic="true">{{ announcement() }}</p>
+    @if (s.results()) {
+      <button type="button" class="primary" (click)="s.finish()">Done</button>
+    } @else if (s.hasChanges()) {
+      <button type="button" class="quiet" (click)="s.discard()" [disabled]="s.applying()">Discard all</button>
+      <button type="button" class="primary" (click)="s.apply()" [disabled]="s.applying() || s.blocked() || s.checking()">{{ s.applying() ? 'Applying…' : 'Apply ' + count(s.tray().length) }}</button>
+    }
+  </footer>
+</dialog>

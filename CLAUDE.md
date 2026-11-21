@@ -5,7 +5,7 @@
 
 ## 1. Project Snapshot
 - **Name:** llm-agentforge-cli
-- **Stack:** <fill in>
+- **Stack:** Node.js 22+ CommonJS with no runtime dependencies (CLI and dashboard server); Angular 22 + TypeScript for the dashboard UI (Node 24.15+)
 - **Owner:** grego
 - **Repo root:** `D:\Repos\LLM\llm-agentforge-cli`
 - **Bootstrapped:** 2026-11-11 via `agentforge`
@@ -27,20 +27,23 @@ If it can't be reproduced reliably across environments, it's broken. Flag non-de
 Tenant logic, module boundaries, plugin scopes — any change crossing a boundary gets extra scrutiny and explicit justification.
 
 ## 3. Map (where things live)
-<!-- Edit this section to point at your actual files. Reference, don't inline. -->
-- **Entry point:** `@src/index.ts` <!-- e.g. -->
-- **Config:** `@config/`
-- **Types/contracts:** `@src/types/`
-- **Tests:** `@tests/`
-- **Build/CI:** `@.github/workflows/` or `@azure-pipelines.yml`
-- **ADRs / decisions:** `@docs/adr/`
+- **Entry points:** `@src/cli/main.js` (CLI) · `@dashboard/server/main.js` (dashboard server)
+- **Core layers:** `@src/domain/` (rules, errors) · `@src/application/` (use cases) · `@src/deployment/` (plan, then apply; `apply.js` is the only code that writes into a project) · `@src/infra/` (fs, git, paths) · `@src/discovery/` (skill scan, lint, listing budget)
+- **Dashboard:** `@dashboard/server/` (HTTP, read and write workers) · `@dashboard/web/` (Angular UI) · `@dashboard/contracts.d.ts` (API shapes)
+- **Machine state:** `~/.agentforge/` (repos.json, config.json, merged-skills/, views/)
+- **Templates:** `@templates/`
+- **Tests:** `@tests/` (node:test) · `@dashboard/web/src/app/*.spec.ts` (vitest) · `@dashboard/web/e2e/` (Playwright)
+- **Build/CI:** `@.github/workflows/ci.yml`
+- **Docs:** `@README.md` · `@docs/USER-GUIDE.md` · `@docs/DASHBOARD.md`
 
 ## 4. Build & Run
-<!-- Replace with real commands. Keep terse. -->
 ```bash
-<build>
-<test>
-<run>
+npm test                     # core tests (node:test); no install needed
+npm --prefix dashboard/web ci   # dashboard dependencies (Node 24.15+)
+npm run dashboard:test       # dashboard unit tests (vitest)
+npm run dashboard:build      # Angular build into dashboard/web/dist
+node src/cli/main.js help    # the CLI
+npm run dashboard:start      # dashboard; open http://127.0.0.1:<port>, not localhost
 ```
 
 ## 5. Conventions

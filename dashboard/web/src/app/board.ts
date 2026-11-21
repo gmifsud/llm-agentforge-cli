@@ -93,6 +93,7 @@ export class Board implements OnInit, OnDestroy {
   // ─── actions ───────────────────────────────────────────────────────────────
   submitAttach(event: Event) {
     event.preventDefault();
+    if (this.s.changesLocked()) return;
     const location = this.location().trim(); if (!location) return;
     this.s.attach(location, this.name().trim(), this.branch().trim());
     this.attachOpen.set(false); this.location.set(''); this.name.set(''); this.branch.set('');
@@ -106,6 +107,7 @@ export class Board implements OnInit, OnDestroy {
   toggleTarget(id: string, on: boolean) { const next = new Set(this.wireTargets()); if (on) next.add(id); else next.delete(id); this.wireTargets.set(next); }
   submitWire(event: Event, report: ProjectReport) {
     event.preventDefault();
+    if (this.s.changesLocked()) return;
     const targets = this.agentIds.filter(id => this.wireTargets().has(id)); if (!targets.length) return;
     this.s.wire(report.project.id, targets, { writeDocs: this.wireDocs(), link: this.wireCopy() ? 'copy' : 'auto' });
     this.wiring.set('');

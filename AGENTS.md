@@ -5,7 +5,7 @@
 
 ## Project
 - **Name:** llm-agentforge-cli
-- **Stack:** <fill in>
+- **Stack:** Node.js 22+ CommonJS with no runtime dependencies (CLI and dashboard server); Angular 22 + TypeScript for the dashboard UI (Node 24.15+)
 - **Owner:** grego
 - **Repo root:** `D:\Repos\LLM\llm-agentforge-cli`
 - **Bootstrapped:** 2026-11-11 via `agentforge`
@@ -25,9 +25,12 @@ Target the specific file/function causing the issue. No cascading defensive refa
 
 ## Build & Run
 ```bash
-<build>
-<test>
-<run>
+npm test                     # core tests (node:test); no install needed
+npm --prefix dashboard/web ci   # dashboard dependencies (Node 24.15+)
+npm run dashboard:test       # dashboard unit tests (vitest)
+npm run dashboard:build      # Angular build into dashboard/web/dist
+node src/cli/main.js help    # the CLI
+npm run dashboard:start      # dashboard; open http://127.0.0.1:<port>, not localhost
 ```
 
 ## Conventions

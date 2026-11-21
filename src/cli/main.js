@@ -56,7 +56,7 @@ PowerShell spelling is accepted too: -Path, -Target, -DryRun, -NoPreserve, -Vaul
 Exit codes: 0 ok · 1 failure · 2 usage · 3 refused (conflict or safety boundary; nothing applied)
 
 Vault root for init/link: --vault > AGENTFORGE_VAULT_ROOT > ~/.agentforge/config.json vaultRoot
-  > ~/.agentforge/merged-skills (only when repos.json exists) > platform default.
+  > ~/.agentforge/merged-skills (only when repos.json exists) > ~/.agentforge/vault.
 `;
 
 function createLogger(stream, { color }) {

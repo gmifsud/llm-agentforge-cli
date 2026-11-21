@@ -1,89 +1,23 @@
-import { Component, computed, inject } from '@angular/core';
+import { Component, ElementRef, OnDestroy, afterRenderEffect, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { Store } from './store';
 import { pendingChecks } from './project-status';
 
 const TONE_LABEL: Record<string, string> = { add: 'Adds', remove: 'Removes', change: 'Changes', note: 'Note', warn: 'Check' };
 const STATUS_LABEL: Record<string, string> = { applied: 'Applied', refused: 'Refused', failed: 'Failed', skipped: 'Not run', uncertain: 'Outcome unknown' };
+const CLOCK_INTERVAL_MS = 1000;
 
-@Component({ selector: 'af-tray', template: `
-  @if (s.tray().length || s.results()) {
-    <aside class="tray" [class.open]="s.trayOpen()" aria-labelledby="tray-title">
-      <div class="tray-bar">
-        <button type="button" class="tray-toggle" (click)="s.trayOpen.set(!s.trayOpen())" [attr.aria-expanded]="s.trayOpen()" aria-controls="tray-body">
-          <span id="tray-title">{{ heading() }}</span>
-        </button>
-        <div class="tray-actions">
-          @if (s.results()) {
-            <button type="button" class="primary" (click)="s.finish()">Done</button>
-          } @else {
-            <button type="button" class="quiet" (click)="s.discard()" [disabled]="s.applying()">Discard all</button>
-            <button type="button" class="primary" (click)="s.apply()" [disabled]="s.applying() || s.blocked() || s.checking()">
-              {{ s.applying() ? 'Applying…' : 'Apply ' + count(s.tray().length) }}
-            </button>
-          }
-        </div>
-      </div>
-      @if (s.trayOpen()) {
-        <div class="tray-body" id="tray-body">
-          @if (s.applyError()) { <p class="notice fault" role="alert">{{ s.applyError() }}</p> }
-          @if (!s.results() && checks()) {
-            <p class="fine">{{ checks() }} {{ checks() === 1 ? 'check asks' : 'checks ask' }} an agent's own tool whether it sees the skills. Most send one short question, on your account. Nothing runs until you press Apply, and each check runs on its own, so one that cannot be made does not stop the rest.</p>
-          }
-          @if (!s.results() && !s.applying() && offer().length; as n) {
-            <div class="offer">
-              <p>Rebuilding the library changes what {{ n }} {{ n === 1 ? 'agent reads' : 'agents read' }}. Check {{ n === 1 ? 'it' : 'them' }} afterwards?</p>
-              <button type="button" class="quiet tiny" (click)="s.verifyMany(offer())">Add {{ n === 1 ? '1 check' : n + ' checks' }} to this list</button>
-            </div>
-          }
-          @if (s.results(); as results) {
-            <ol class="steps">
-              @for (r of results; track $index) {
-                <li [class]="'step result ' + r.status">
-                  <h3>{{ r.title }} <span class="status">{{ status[r.status] }}</span></h3>
-                  @if (r.message) { <p class="message">{{ r.message }}</p> }
-                  @if (r.status === 'applied') {
-                    <ul class="lines">@for (l of r.lines; track $index) { <li [class]="l.tone"><span class="sr">{{ tone[l.tone] }}: </span>{{ l.text }}</li> }</ul>
-                  }
-                </li>
-              }
-            </ol>
-          } @else {
-            <ol class="steps">
-              @for (item of s.tray(); track item.uid) {
-                <li class="step" [class.blocked]="!s.itemReady(item) && !!(item.preview || item.error)">
-                  <h3>{{ item.preview?.title || 'Checking…' }}</h3>
-                  @if (item.error) { <p class="message fault">{{ item.error }}</p> }
-                  @if (item.preview; as p) {
-                    @if (item.deferred && item.change.kind === 'library.rebuild') {
-                      <p class="deferred">Rebuilds the library with the changes above, so your wired projects get them. The exact list appears in the result.</p>
-                    } @else {
-                      @if (item.deferred) { <p class="deferred">Checked again after the steps above run, so the details may change.</p> }
-                      <ul class="lines">@for (l of p.lines; track $index) { <li [class]="l.tone"><span class="sr">{{ tone[l.tone] }}: </span>{{ l.text }}</li> }</ul>
-                    }
-                    @if (!s.itemReady(item)) { @for (c of p.conflicts; track $index) { <p class="message fault">{{ c }}</p> } }
-                  }
-                  <button type="button" class="quiet tiny" (click)="s.remove(item.uid)" [disabled]="s.applying()">Remove</button>
-                </li>
-              }
-            </ol>
-            <p class="fine">Changes run in this order, one at a time. Each one is checked against your folders again just before it runs. If one cannot be made, the ones after it are not run. The exception is a fetch or a check: one of those that fails never stops the others.</p>
-          }
-        </div>
-      }
-    </aside>
-  }
-` })
-export class Tray {
+@Component({ selector: 'af-tray', templateUrl: './tray.html' })
+export class Tray implements OnDestroy {
   s = inject(Store);
   tone = TONE_LABEL;
   status = STATUS_LABEL;
+  private review = viewChild.required<ElementRef<HTMLDialogElement>>('review');
+  private opener: HTMLElement | null = null;
+  private clock = signal(Date.now());
   count(n: number) { return n === 1 ? '1 change' : `${n} changes`; }
-  /** Checks waiting in the sheet, for the note about what they ask. */
+  rows = computed(() => this.s.runSteps().length ? this.s.runSteps() : this.s.tray().map(item => ({ item, startedAt: null, result: null })));
   checks = computed(() => this.s.tray().filter(i => i.change.kind === 'project.verify').length);
-  /**
-   * A rebuild changes what every agent reading the library through a link sees, so offer to check those afterwards.
-   * Only offered while a rebuild is waiting; checks already in the sheet are not offered twice.
-   */
+  operations = computed(() => this.s.tray().length - this.checks());
   offer = computed(() => {
     const c = this.s.catalog();
     if (!c || !this.s.tray().some(i => i.change.kind === 'library.rebuild')) return [];
@@ -95,12 +29,61 @@ export class Tray {
       const applied = results.filter(r => r.status === 'applied').length;
       const uncertain = results.filter(r => r.status === 'uncertain').length;
       if (uncertain) return `${applied} confirmed applied; ${uncertain} ${uncertain === 1 ? 'outcome' : 'outcomes'} unknown`;
-      return applied === results.length ? `Applied ${this.count(applied)}` : `${applied} of ${results.length} applied`;
+      return applied === results.length ? `Applied ${this.count(applied)}` : `${results.length} finished · ${applied} applied · ${results.length - applied} need attention`;
     }
     const progress = this.s.applyProgress();
     if (this.s.applying()) return progress ? `Applying: ${progress.done} of ${progress.total} done` : 'Applying your changes';
     if (this.s.checking()) return 'Checking your changes';
     const n = this.s.tray().length;
+    if (!n) return 'No changes queued';
     return this.s.blocked() ? `${this.count(n)}, one needs attention` : `${this.count(n)} ready to review`;
   });
+  announcement = computed(() => {
+    const index = this.s.activeStep();
+    const active = index === null ? null : this.s.runSteps()[index];
+    return active ? `${this.heading()}. Running: ${active.item.preview?.title || active.item.change.kind}` : this.heading();
+  });
+
+  private beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+  constructor() {
+    afterRenderEffect(() => {
+      const dialog = this.review().nativeElement;
+      if (this.s.trayOpen() && !dialog.open) {
+        this.opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        dialog.showModal();
+        dialog.querySelector<HTMLElement>('#review-title')?.focus();
+      } else if (!this.s.trayOpen() && dialog.open) {
+        dialog.close();
+        const back = this.opener?.isConnected ? this.opener : document.getElementById('changes-control');
+        back?.focus();
+        this.opener = null;
+      }
+    });
+    effect(onCleanup => {
+      if (!this.s.applying()) return;
+      this.clock.set(Date.now());
+      const timer = setInterval(() => this.clock.set(Date.now()), CLOCK_INTERVAL_MS);
+      window.addEventListener('beforeunload', this.beforeUnload);
+      onCleanup(() => { clearInterval(timer); window.removeEventListener('beforeunload', this.beforeUnload); });
+    });
+  }
+  open() { this.s.trayOpen.set(true); }
+  close(event?: Event) { event?.preventDefault(); this.s.trayOpen.set(false); }
+  collapse() { this.s.setTrayHidden(false); }
+  hide() { this.s.setTrayHidden(true); }
+  trapFocus(event: KeyboardEvent) {
+    if (event.key !== 'Tab') return;
+    const controls = Array.from(this.review().nativeElement.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]'))
+      .filter(element => element.tabIndex >= 0 && element.getClientRects().length > 0);
+    const target = event.shiftKey ? controls.at(-1) : controls[0];
+    const boundary = event.shiftKey ? controls[0] : controls.at(-1);
+    if (target && document.activeElement === boundary) { event.preventDefault(); target.focus(); }
+  }
+  // A delayed native close event must not close a newly reopened dialog.
+  closed() { if (!this.review().nativeElement.open) this.s.trayOpen.set(false); }
+  elapsed(started: number | null) {
+    const seconds = Math.max(0, Math.floor((this.clock() - (started ?? this.clock())) / 1000));
+    return seconds < 60 ? `${seconds}s elapsed` : `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed`;
+  }
+  ngOnDestroy() { window.removeEventListener('beforeunload', this.beforeUnload); }
 }

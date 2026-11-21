@@ -127,7 +127,7 @@ export class SetEditor {
   }
 
   save() {
-    if (!this.canSave()) return;
+    if (!this.canSave() || this.s.changesLocked()) return;
     this.s.saveSet(this.name(), this.rules(), !this.isNew());
     void this.router.navigateByUrl('/sets');
   }

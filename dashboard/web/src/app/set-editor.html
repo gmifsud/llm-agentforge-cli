@@ -96,7 +96,7 @@
       </section>
 
       <div class="actions">
-        <button type="button" class="primary" (click)="save()" [disabled]="!canSave()">Save set</button>
+        <button type="button" class="primary" (click)="save()" [disabled]="!canSave() || s.changesLocked()">Save set</button>
         <a class="button quiet" routerLink="/sets">Cancel</a>
         <span class="fine">Nothing changes until you apply.</span>
       </div>
