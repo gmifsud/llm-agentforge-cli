@@ -313,9 +313,23 @@ function cmdSync(title, { paths, env, opts, log, elog, git }) {
   const summary = Object.entries(bySource).map(([s, n]) => `${n} from ${s}`).join(', ');
   if (dryRun) log.dry(`would link ${res.view.entries.length} skills (${summary})`);
   else log.ok(`merged view built: ${res.linked} skills linked (${summary})`);
+  printKept(res.kept, dryRun, log);
   printSinceLastBuild(res.lock, log);
   printSets(res.sets, dryRun, log);
   return exit;
+}
+
+const KEPT_REASONS = { taken: 'name taken by another skill', 'is-main': 'its original is the main copy' };
+
+/** Kept copies built with the library; shown only when there are rules. Each rule that could not be built is warned about. */
+function printKept(kept, dryRun, log) {
+  const rules = kept.built.length + kept.missing.length + kept.blocked.length;
+  if (!rules) return;
+  if (dryRun) log.dry(`would build ${kept.built.length} kept ${kept.built.length === 1 ? 'copy' : 'copies'}`);
+  else log.ok(`kept copies: ${kept.built.length} built`);
+  for (const name of kept.missing) log.warn(`${name}: kept copy not built (original not found)`);
+  for (const b of kept.blocked) log.warn(`${b.name}: kept copy not built (${KEPT_REASONS[b.reason] || b.reason})`);
+  for (const d of kept.droppedLinks) log.warn(`${d.name}: link ${d.path} points outside the skill and was not copied`);
 }
 
 /** The sets built with the library, or on a dry run the ones that would be. A rule that selects nothing is warned about. */

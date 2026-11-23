@@ -143,3 +143,24 @@ test('repo add/list/sync --no-fetch builds the view; doctor then uses it; remove
   assert.equal(cli(['repo', 'remove', 'ext'], { home, env }).code, 0);
   assert.ok(fs.existsSync(path.join(ext, 'extra', 'SKILL.md')), 'local source untouched');
 });
+
+test('repo sync --no-fetch builds kept copies and says so; with no rules it stays quiet about them', (t) => {
+  const root = tempRoot(t);
+  const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.agentforge'), { recursive: true });
+  const vault = makeVault(root, 'vault', ['tdd']);
+  const ext = makeVault(root, 'ext', ['tdd']);
+  const env = { AGENTFORGE_VAULT_ROOT: vault };
+  assert.equal(cli(['repo', 'add', ext, '--name', 'ext'], { home, env }).code, 0);
+  const quiet = cli(['repo', 'sync', '--no-fetch'], { home, env });
+  assert.equal(quiet.code, 0, quiet.err);
+  assert.doesNotMatch(quiet.out, /kept cop/);
+
+  const { digestSkill } = require('../src/discovery/skill-digest');
+  const rule = { name: 'tdd-ext', from: { skill: 'tdd', source: 'ext' }, description: 'The ext copy.', digest: digestSkill(path.join(ext, 'tdd')).digest, keptAt: 'now' };
+  fs.writeFileSync(path.join(home, '.agentforge', 'config.json'), JSON.stringify({ kept: [rule, { ...rule, name: 'tdd-gone', from: { skill: 'tdd', source: 'nowhere' } }] }));
+  const sync = cli(['repo', 'sync', '--no-fetch'], { home, env });
+  assert.equal(sync.code, 0, sync.err);
+  assert.match(sync.out, /kept copies: 1 built/);
+  assert.match(sync.err + sync.out, /tdd-gone: kept copy not built \(original not found\)/);
+  assert.ok(fs.existsSync(path.join(home, '.agentforge', 'kept', 'tdd-ext', 'SKILL.md')));
+});
