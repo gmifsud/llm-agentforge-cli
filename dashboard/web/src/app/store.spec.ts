@@ -6,6 +6,7 @@ import { Store, type Catalog } from './store';
 import { Library } from './library';
 import { KeptIssueRow } from './kept-issues';
 import { ClashRow, ClashQueue } from './clash-queue';
+import { LibraryCard } from './library-card';
 import { CHANGES_PREFERENCE_KEY } from './changes-presentation';
 
 const library = { path: 'lib', built: true, builtAt: '', invalid: false, size: 1, add: [], remove: [], change: [], inSync: true };
@@ -604,6 +605,21 @@ describe('client state', () => {
     it('a changed clash that stale kept copies do not explain still shows as a choice row', () => {
       store.catalog.set(withIssues([issue({ fromSourceId: 'b' })]));
       expect(store.attention().map(r => [r.name, r.kind])).toEqual([['tdd', 'changed'], ['tdd', 'stale'], ['x', 'default']]);
+    });
+
+    it('the library card draws one row per thing to look at, even when two share a clash name', async () => {
+      store.catalog.set(withIssues([issue({ fromSourceId: 'b' })]));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const fixture = TestBed.createComponent(LibraryCard);
+        await fixture.whenStable();
+        // A fresh catalogue redraws the list over the rows already there, which is where row identity matters.
+        store.catalog.set(withIssues([issue({ fromSourceId: 'b' })]));
+        fixture.detectChanges(); await fixture.whenStable();
+        const rows = [...(fixture.nativeElement as HTMLElement).querySelectorAll('.clash-row')];
+        expect(rows.map(r => r.querySelector('strong')?.textContent)).toEqual(['tdd', 'tdd', 'x']);
+        expect(warn.mock.calls.flat().join(' ')).not.toMatch(/NG0955/);
+      } finally { warn.mockRestore(); }
     });
 
     it('a missing issue needs no clash; Remove queues the unkeep and a rebuild', async () => {

@@ -91,7 +91,7 @@ import { SetAsideList } from './set-aside-list';
             @if (n.decided) { <li class="muted"><b>{{ n.decided }}</b> decided <span class="fine">by your source order, or by you</span></li> }
             @if (n.identical) { <li class="muted"><b>{{ n.identical }}</b> identical {{ n.identical === 1 ? 'copy' : 'copies' }} <span class="fine">nothing to decide</span></li> }
           </ul>
-          @for (col of attentionRows(); track col.name) {
+          @for (col of attentionRows(); track col.key) {
             <div class="clash-row">
               <div>
                 <strong>{{ col.name }}</strong>
