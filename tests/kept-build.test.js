@@ -118,3 +118,13 @@ description: a real skill
   assert.deepEqual(result.kept, { built: [], droppedLinks: [], missing: [], blocked: [{ name: NAME, reason: 'taken' }] });
   assert.ok(fs.existsSync(path.join(taken.paths.mergedSkills, NAME)), 'the other skill keeps the name');
 });
+
+test('a bad config refuses before any fetch touches a clone', (t) => {
+  const f = keptFixture(t);
+  fs.writeFileSync(f.paths.configJson, JSON.stringify({ vaultRoot: f.vault, kept: 'nope' }));
+  fs.writeFileSync(f.paths.reposJson, JSON.stringify({ repositories: [{ name: 'remote', type: 'git', url_or_path: 'https://example.invalid/x.git' }] }));
+  const calls = [];
+  const git = { clone: (...a) => calls.push(['clone', ...a]), pull: (...a) => calls.push(['pull', ...a]), revision: () => 'x' };
+  assert.throws(() => syncView({ paths: f.paths, env: {}, fetch: true, git }), (e) => e.code === 'CONFIG_INVALID');
+  assert.deepEqual(calls, []);
+});

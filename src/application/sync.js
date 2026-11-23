@@ -14,6 +14,11 @@ const { buildSets } = require('./sets');
 function computeLibrary({ paths, env, cliVault, forceExternal = false }) {
   const config = loadConfig(paths);
   const primaryRoot = resolvePrimarySource({ cliVault, env, paths, config });
+  return libraryFrom({ paths, config, primaryRoot, forceExternal });
+}
+
+/** The view from an already loaded config and resolved primary source, reading the registry as it is now. */
+function libraryFrom({ paths, config, primaryRoot, forceExternal }) {
   const registry = loadRegistry(paths);
   const view = computeView({
     primaryRoot,
@@ -33,8 +38,11 @@ function computeLibrary({ paths, env, cliVault, forceExternal = false }) {
  * Returns { primaryRoot, fetch: [...], kept: { built, droppedLinks, missing, blocked }, view: { entries, collisions, rejected }, lock, sets, linked? }.
  */
 function syncView({ paths, env, cliVault, forceExternal = false, fetch = true, dryRun = false, git }) {
+  // Config and the primary source are checked before any fetch, so a bad one refuses before a clone is touched.
+  const config = loadConfig(paths);
+  const primaryRoot = resolvePrimarySource({ cliVault, env, paths, config });
   const fetchResults = fetch ? fetchSources({ paths, git }) : [];
-  const { primaryRoot, registry, view } = computeLibrary({ paths, env, cliVault, forceExternal });
+  const { registry, view } = libraryFrom({ paths, config, primaryRoot, forceExternal });
   // What the library holds now, read from disk, against the record of the last build. A dry run reports it without recording it.
   const previous = readLock(paths);
   const skills = snapshot(view.entries, revisionLookup({ repos: registry.repositories, git, rootFor: (repo) => cacheRootFor(paths, repo) }));
