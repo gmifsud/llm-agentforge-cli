@@ -80,3 +80,9 @@ test('distinctOthers never treats a null digest as equal to anything', () => {
     { source: 'C', also: [], digest: null },
   ]);
 });
+
+test('an upper-case plain name can be kept: the prefix is its lower-case form', () => {
+  assert.equal(checkKeptName('brainstorming-x', 'Brainstorming', new Set()), null);
+  assert.match(checkKeptName('other-x', 'Brainstorming', new Set()), /must start with "brainstorming-"/);
+  validateKept([rule({ from: { skill: 'Brainstorming', source: 'repoB' } })], 'config.json');
+});

@@ -362,6 +362,12 @@ describe('client state', () => {
         { id: 'kept-gate', sourceId: 'a', name: 'brainstorming-gate', relativePath: 'b', kept: { fromSkill: 'brainstorming', fromSourceId: 'a', stale: false, built: true, description: 'The gated copy.' } }] };
     };
 
+    it('nameProblem takes the lower-case form of an upper-case plain name as the prefix', () => {
+      store.catalog.set(keepCatalog());
+      expect(store.nameProblem('Brainstorming', 'brainstorming-x')).toBeNull();
+      expect(store.nameProblem('Brainstorming', 'other-x')).toMatch(/must start with "brainstorming-"/);
+    });
+
     it('nameProblem lets a clash keep its own kept names, and no other clash', () => {
       store.catalog.set(keptAgain());
       expect(store.nameProblem('brainstorming', 'brainstorming-gate', ['brainstorming-gate'])).toBeNull();

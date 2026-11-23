@@ -129,3 +129,11 @@ test('a tool that cannot be given an empty argument safely gives the fallback, n
   assert.match(r.reason, /empty argument/);
   assert.match(r.name, /^pdf-/);
 });
+
+test('the fallback name for an upper-case plain name starts with its lower-case form, and is a valid kept name', () => {
+  const { checkKeptName } = require('../src/domain/kept');
+  const r = ask(() => 'no json here', { plain: 'PDF', taken: new Set(['pdf']) });
+  assert.equal(r.by, 'fallback');
+  assert.match(r.name, /^pdf-/);
+  assert.equal(checkKeptName(r.name, 'PDF', new Set()), null);
+});

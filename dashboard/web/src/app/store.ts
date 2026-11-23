@@ -190,7 +190,8 @@ export class Store {
   nameProblem(plain: string, name: string, own: readonly string[] = []): string | null {
     if (!KEPT_NAME_PATTERN.test(name)) return 'use lower-case letters, digits and single hyphens only';
     if (name.length > KEPT_NAME_MAX) return `at most ${KEPT_NAME_MAX} characters`;
-    if (!name.startsWith(`${plain}-`)) return `must start with "${plain}-"`;
+    const prefix = `${plain.toLowerCase()}-`;
+    if (!name.startsWith(prefix)) return `must start with "${prefix}"`;
     const taken = new Set<string>((this.catalog()?.skills || []).map(s => s.name.toLowerCase()));
     for (const item of this.pendingFor('library.keep', () => true)) {
       for (const k of (item.change.args?.['keep'] as { name: string }[] | undefined) || []) taken.add(k.name.toLowerCase());

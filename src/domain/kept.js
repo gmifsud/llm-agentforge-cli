@@ -13,12 +13,13 @@ const isString = (v) => typeof v === 'string';
 
 /**
  * Why `name` cannot be a kept copy of `plain`, or null when it is fine.
- * `taken` holds nameKey()-folded names already in use.
+ * `taken` holds nameKey()-folded names already in use. A kept name is lower-case, so it starts with `plain` lower-cased.
  */
 function checkKeptName(name, plain, taken) {
   if (!isString(name) || !NAME_PATTERN.test(name)) return 'use lower-case letters, digits and single hyphens only';
   if (name.length > NAME_MAX) return `at most ${NAME_MAX} characters`;
-  if (!name.startsWith(`${plain}-`)) return `must start with "${plain}-"`;
+  const prefix = `${plain.toLowerCase()}-`;
+  if (!name.startsWith(prefix)) return `must start with "${prefix}"`;
   if (taken.has(nameKey(name))) return 'that name is already in use';
   return null;
 }

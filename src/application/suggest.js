@@ -37,7 +37,7 @@ function buildPrompt({ plain, main, other, taken }) {
     '',
     `Two copies of the skill "${plain}" exist. The main copy is used. Suggest a name and description so the other copy can be kept beside it.`,
     'Rules:',
-    `- name: lower-case letters, digits and single hyphens only; at most ${NAME_MAX} characters; must start with "${plain}-"; must not be one of: ${[...taken].join(', ') || '(none)'}.`,
+    `- name: lower-case letters, digits and single hyphens only; at most ${NAME_MAX} characters; must start with "${plain.toLowerCase()}-"; must not be one of: ${[...taken].join(', ') || '(none)'}.`,
     `- description: one paragraph on one line, at most ${DESCRIPTION_MAX} characters, saying when to use this copy rather than the main one.`,
     '- difference: one short line saying how this copy differs from the main one.',
     '',
@@ -82,7 +82,7 @@ function findObject(output) {
 
 function fallback({ plain, main, other, taken }, reason) {
   const slug = other.source.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'other';
-  const base = `${plain}-${slug}`.slice(0, NAME_MAX - 4).replace(/-+$/, '');
+  const base = `${plain.toLowerCase()}-${slug}`.slice(0, NAME_MAX - 4).replace(/-+$/, '');
   let name = base;
   for (let n = 2; taken.has(nameKey(name)); n++) name = `${base}-${n}`;
   const { fields } = parseFrontmatter(other.text);
