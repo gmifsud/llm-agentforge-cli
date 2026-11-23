@@ -99,6 +99,8 @@ test('choosing a different main re-saves the clash: old main gets a rule, the ne
   const svc = new WriteService(f.options);
   apply(svc, keep());
   const flipped = { skill: 'frontend-design', main: 'frontend-lab', keep: [{ source: 'vault', name: 'frontend-design-vault', description: 'The vault variant.' }] };
+  const pv = svc.preview({ kind: 'library.keep', args: flipped });
+  assert.ok(pv.lines.some(l => l.tone === 'remove' && /frontend-design-lab/.test(l.text)), 'the rule that goes away is named');
   const [r] = apply(svc, { kind: 'library.keep', args: flipped });
   assert.equal(r.status, 'applied', r.message);
   const saved = readConfig(f);
@@ -146,4 +148,18 @@ test('a preference written between preview and apply is not lost', t => {
   const saved = readConfig(f);
   assert.equal(saved.preferences['sql-review'].chosenAt, 'then');
   assert.equal(saved.preferences['frontend-design'].source, 'vault');
+});
+
+test('re-saving a source under a new name names the old copy as leaving and keeps only the new rule', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  apply(svc, keep());
+  const renamed = keep({ keep: [{ ...KEEP.keep[0], name: 'frontend-design-lab2' }] });
+  const p = svc.preview(renamed);
+  assert.equal(p.ok, true, JSON.stringify(p.conflicts));
+  assert.ok(p.lines.some(l => l.tone === 'remove' && /frontend-design-lab\b(?!2)/.test(l.text)));
+  assert.ok(!p.lines.some(l => /Agents will see/.test(l.text)), 'net zero: no count line');
+  const [r] = apply(svc, { kind: 'library.keep', args: p.args });
+  assert.equal(r.status, 'applied', r.message);
+  assert.deepEqual(readConfig(f).kept.map(k => k.name), ['frontend-design-lab2']);
 });

@@ -297,7 +297,17 @@ class WriteService {
           ? `${[row.source, ...row.also].join(' and ')} are the same; kept once as \`${e.name}\`.`
           : `${owner(row.source)} \`${plain}\` is kept as \`${e.name}\`.` });
       }
-      lines.push({ tone: 'note', text: `Agents will see ${plural(rows.length, 'more skill')} once the library is rebuilt. Nothing in any source changes.` });
+      // Rules this clash already has are all replaced; name each one that does not come back as it was.
+      const existing = (config.kept || []).filter(isThis);
+      for (const r of existing) {
+        const same = rows.some(row => row.source === r.from.source && entries.find(x => x.source === row.source)?.name === r.name);
+        if (same) continue;
+        lines.push({ tone: 'remove', text: r.from.source === main
+          ? `The kept copy ${r.name} leaves the library; its content now has the plain name ${plain}`
+          : `The kept copy ${r.name} leaves the library at the next rebuild` });
+      }
+      const net = rows.length - existing.length;
+      if (net !== 0) lines.push({ tone: 'note', text: `Agents will see ${plural(Math.abs(net), net > 0 ? 'more skill' : 'fewer skill', net > 0 ? 'more skills' : 'fewer skills')} once the library is rebuilt. Nothing in any source changes.` });
       if (!inspectLibrary({ root: this.paths.mergedSkills, config }).budget.fits) lines.push({ tone: 'warn', text: 'The listing is already over its budget; one more description makes that slightly worse.' });
       lines.push({ tone: 'note', text: 'Saved in ~/.agentforge/config.json. The command line uses the same rules.' });
     }
