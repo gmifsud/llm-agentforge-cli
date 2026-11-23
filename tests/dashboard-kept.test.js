@@ -163,3 +163,43 @@ test('re-saving a source under a new name names the old copy as leaving and keep
   assert.equal(r.status, 'applied', r.message);
   assert.deepEqual(readConfig(f).kept.map(k => k.name), ['frontend-design-lab2']);
 });
+
+test('library.rekeep re-pins the rule and the clash choice, so nothing is stale or changed any more', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  apply(svc, keep());
+  fs.appendFileSync(path.join(f.source, 'frontend-design', 'SKILL.md'), '\nMore.\n');
+  const staleBefore = svc.viewFor(svc.config(), { preferences: svc.config().preferences });
+  assert.equal(staleBefore.kept[0].stale, true);
+  assert.equal(staleBefore.clashes.find(c => c.name === 'frontend-design').stale, true);
+
+  const p = svc.preview({ kind: 'library.rekeep', args: { name: 'frontend-design-lab' } });
+  assert.equal(p.ok, true, JSON.stringify(p.conflicts));
+  const [r] = apply(svc, { kind: 'library.rekeep', args: p.args });
+  assert.equal(r.status, 'applied', r.message);
+  const saved = readConfig(f);
+  const now = digestOf(path.join(f.source, 'frontend-design'));
+  assert.equal(saved.kept[0].digest, now);
+  assert.equal(saved.kept[0].description, 'Use when you want the lab variant.', 'no description given: kept as it was');
+  assert.equal(saved.preferences['frontend-design'].digests['frontend-lab'], now);
+  const after = svc.viewFor(svc.config(), { preferences: svc.config().preferences });
+  assert.equal(after.kept[0].stale, false);
+  assert.equal(after.clashes.find(c => c.name === 'frontend-design').stale, false);
+});
+
+test('library.rekeep can replace the description, refuses a bad one, and refuses a gone original', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  apply(svc, keep());
+  const [r] = apply(svc, { kind: 'library.rekeep', args: { name: 'frontend-design-lab', description: '  Use for the newer lab variant.  ' } });
+  assert.equal(r.status, 'applied', r.message);
+  assert.equal(readConfig(f).kept[0].description, 'Use for the newer lab variant.');
+  const bad = svc.preview({ kind: 'library.rekeep', args: { name: 'frontend-design-lab', description: '   ' } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.conflicts.join(' '), /description/);
+  assert.equal(svc.preview({ kind: 'library.rekeep', args: { name: 'nope' } }).ok, false);
+  writeConfig(f, { kept: [{ ...readConfig(f).kept[0], from: { skill: 'frontend-design', source: 'gone-source' } }] });
+  const gone = svc.preview({ kind: 'library.rekeep', args: { name: 'frontend-design-lab' } });
+  assert.equal(gone.ok, false);
+  assert.match(gone.conflicts.join(' '), /The original is gone; remove the copy instead\./);
+});

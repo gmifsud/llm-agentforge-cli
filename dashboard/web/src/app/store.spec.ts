@@ -561,4 +561,46 @@ describe('client state', () => {
       await refreshAfter(apply);
     });
   });
+
+  describe('kept copies that need a look', () => {
+    const issue = (over: Partial<Catalog['keptIssues'][number]> = {}) => ({ name: 'tdd-lab', fromSkill: 'tdd', fromSourceId: 'v', kind: 'stale' as const, ...over });
+    const withIssues = (keptIssues: Catalog['keptIssues'], collisions?: Catalog['collisions']): Catalog => { const base = clashCatalog(); return { ...base, keptIssues, collisions: collisions || base.collisions }; };
+    const flushPreviews = async () => { for (let i = 0; i < 4; i++) { for (const req of http.match('/api/v1/changes/preview')) req.flush(ok('x')); await settle(); } };
+
+    it('one changed original gives exactly one row: the stale-choice row is not shown beside its stale kept copy', () => {
+      store.catalog.set(withIssues([issue()]));
+      expect(store.attention().map(r => [r.name, r.kind, r.issue?.name ?? null])).toEqual([['tdd', 'stale', 'tdd-lab'], ['x', 'default', null]]);
+    });
+
+    it('a changed clash that stale kept copies do not explain still shows as a choice row', () => {
+      store.catalog.set(withIssues([issue({ fromSourceId: 'b' })]));
+      expect(store.attention().map(r => [r.name, r.kind])).toEqual([['tdd', 'changed'], ['tdd', 'stale'], ['x', 'default']]);
+    });
+
+    it('a missing issue needs no clash; Remove queues the unkeep and a rebuild', async () => {
+      store.catalog.set(withIssues([issue({ name: 'gone-copy', fromSkill: 'gone', fromSourceId: null, kind: 'missing' })], []));
+      expect(store.attention().map(r => [r.name, r.kind])).toEqual([['gone', 'missing']]);
+      store.unkeep(store.attention()[0].issue!.name);
+      expect(store.tray().map(i => [i.change.kind, i.change.args])).toEqual([['library.unkeep', { name: 'gone-copy' }], ['library.rebuild', undefined]]);
+      await flushPreviews();
+    });
+
+    it('taken and is-main issues offer Rename, which opens that clash focused in the Name clashes view', () => {
+      store.catalog.set(withIssues([issue({ name: 'x-lab', fromSkill: 'x', fromSourceId: 'b', kind: 'taken' }), issue({ name: 'x-main', fromSkill: 'x', fromSourceId: 'a', kind: 'is-main' })]));
+      expect(store.attention().map(r => [r.name, r.kind])).toEqual([['tdd', 'changed'], ['x', 'taken'], ['x', 'is-main'], ['x', 'default']]);
+      store.view.set('attention');
+      store.renameKept('x');
+      expect(store.view()).toBe('collisions');
+      expect(store.focusedClash()).toBe('x');
+    });
+
+    it('rekeep queues the re-pin with the description only when one is given, then a rebuild', async () => {
+      store.catalog.set(withIssues([issue()]));
+      store.rekeep('tdd-lab');
+      store.rekeep('tdd-lab', 'Use for lab work.');
+      expect(store.tray().map(i => [i.change.kind, i.change.args])).toEqual([
+        ['library.rekeep', { name: 'tdd-lab' }], ['library.rekeep', { name: 'tdd-lab', description: 'Use for lab work.' }], ['library.rebuild', undefined]]);
+      await flushPreviews();
+    });
+  });
 });

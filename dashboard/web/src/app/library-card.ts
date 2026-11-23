@@ -1,6 +1,7 @@
 import { Component, computed, inject, input } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { Store, type Collision, type SkillView } from './store';
+import { Store, type AttentionRow, type SkillView } from './store';
+import { keptIssueLine } from './kept-issues';
 import { sourceLabel } from './source-status';
 import { SetAsideList } from './set-aside-list';
 
@@ -151,8 +152,10 @@ export class LibraryCard {
   /** Share of descriptions an agent will actually be shown. Higher is better. */
   budgetPercent() { const b = this.s.catalog()?.health?.budget; if (!b) return 100; const described = b.entries - b.withoutDescription; return described ? Math.round((b.kept / described) * 100) : 100; }
   showSkills(view: SkillView) { this.s.view.set(view); this.s.page.set(0); this.s.sourceFilter.set(''); this.s.skillQuery.set(''); void this.router.navigateByUrl('/library'); }
-  clashLine(col: Collision) {
+  clashLine(row: AttentionRow) {
     const c = this.s.catalog(); if (!c) return '';
+    if (row.issue) return keptIssueLine(row.issue, this.s);
+    const col = row.collision; if (!col) return '';
     const winner = this.s.skillById(col.winnerId);
     const using = winner ? this.s.sourceName(winner.sourceId) : '';
     if (col.kind === 'changed') {

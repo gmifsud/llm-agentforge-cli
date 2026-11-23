@@ -2,8 +2,8 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { savedChangesPreference, saveChangesPreference } from './changes-presentation';
-import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, Suggestion, SuggestResponse, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
-export type { Catalog, Context, Skill, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, Suggestion, DiffHunk, LintFinding } from '../../../contracts';
+import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, Suggestion, SuggestResponse, TargetReport, Skill, Collision, KeptIssue, SkillComparison } from '../../../contracts';
+export type { Catalog, Context, Skill, KeptIssue, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, Suggestion, DiffHunk, LintFinding } from '../../../contracts';
 
 export const PAGE_SIZE = 50;
 const API = '/api/v1';
@@ -13,7 +13,7 @@ function message(error: any): string { return error?.error?.error?.message || 'T
 
 /** Pipeline order: sources change first, then the library, then projects. */
 const STAGE: Record<ChangeKind, number> = {
-  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.keep': 0, 'library.unkeep': 0, 'library.order': 0, 'source.fetch': 1,
+  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.keep': 0, 'library.unkeep': 0, 'library.rekeep': 0, 'library.order': 0, 'source.fetch': 1,
   'library.rebuild': 2, 'set.save': 2, 'set.remove': 3, 'project.add': 3, 'project.forget': 3, 'skill.setaside': 3, 'skill.restore': 3, 'project.wire': 4, 'project.adopt': 4, 'project.verify': 5,
 };
 
@@ -29,6 +29,12 @@ const KEPT_DESCRIPTION_MAX = 900;
 /** The server runs two suggestions at a time; asking for more only earns a BUSY reply. */
 const SUGGEST_CONCURRENCY = 2;
 const SUGGEST_BUSY_RETRY_MS = 2000;
+
+/**
+ * One thing in Need a look. `choice` rows ('changed', 'default') are clashes; the rest come from a kept copy's issue, with the clash it
+ * belongs to (null once the original is gone). `name` is always the clash's name.
+ */
+export interface AttentionRow { key: string; name: string; kind: 'changed' | 'default' | KeptIssue['kind']; collision: Collision | null; issue: KeptIssue | null; candidateIds: string[] }
 
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
@@ -104,11 +110,28 @@ export class Store {
   readonly visibleSkills = computed(() => this.filteredSkills().slice(this.page() * PAGE_SIZE, (this.page() + 1) * PAGE_SIZE));
 
   // ─── same-name skills ──────────────────────────────────────────────────────
-  /** Clashes a person should look at: a copy changed since they chose, or only the built-in order decided. Changed first. */
-  readonly attention = computed(() => {
-    const all = (this.catalog()?.collisions || []).filter(c => !c.resolved);
-    return [...all.filter(c => c.kind === 'changed'), ...all.filter(c => c.kind === 'default')];
+  /**
+   * What a person should look at: clashes whose choice has changed or that only the default order decided, and one row for each
+   * kept copy with an issue. A changed clash that stale kept copies fully explain is left out, so one changed original gives one row.
+   */
+  readonly attention = computed<AttentionRow[]>(() => {
+    const c = this.catalog(); if (!c) return [];
+    const issues = c.keptIssues || [];
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const explained = (col: Collision) => col.changedSourceIds.length > 0 &&
+      col.changedSourceIds.every(id => issues.some(i => i.kind === 'stale' && same(i.fromSkill, col.name) && i.fromSourceId === id));
+    const open = c.collisions.filter(col => !col.resolved);
+    const row = (col: Collision): AttentionRow => ({ key: `clash:${col.name}`, name: col.name, kind: col.kind === 'changed' ? 'changed' : 'default', collision: col, issue: null, candidateIds: col.candidateIds });
+    const issueRows = issues.map((issue): AttentionRow => {
+      const col = c.collisions.find(x => same(x.name, issue.fromSkill)) || null;
+      return { key: `kept:${issue.name}`, name: col?.name ?? issue.fromSkill, kind: issue.kind, collision: col, issue, candidateIds: col?.candidateIds ?? [] };
+    });
+    return [...open.filter(col => col.kind === 'changed' && !explained(col)).map(row), ...issueRows, ...open.filter(col => col.kind === 'default').map(row)];
   });
+  /** Which clash the Name clashes view should scroll to and focus: set by Rename on a kept copy that cannot take effect. */
+  focusedClash = signal('');
+  /** Go to the clash that needs another name for a kept copy. */
+  renameKept(clash: string) { this.view.set('collisions'); this.page.set(0); this.focusedClash.set(clash); }
   readonly clashCounts = computed(() => {
     const all = this.catalog()?.collisions || [];
     // A clash whose differing copies are all kept is decided, whatever chose its main copy.
@@ -461,6 +484,10 @@ export class Store {
   /** Keep the differing copies under names of their own (`keep`), with `main` holding the plain name. */
   keep(skill: string, main: Source, keep: { source: Source; name: string; description: string }[]) {
     this.queue({ kind: 'library.keep', args: { skill, main: main.key, keep: keep.map(k => ({ source: k.source.key, name: k.name, description: k.description })) } }, { kind: 'library.rebuild' });
+  }
+  /** Accept that a kept copy's original changed: follow it as it is now, with a new description when one is given. */
+  rekeep(name: string, description?: string) {
+    this.queue({ kind: 'library.rekeep', args: description === undefined ? { name } : { name, description } }, { kind: 'library.rebuild' });
   }
   /** Stop keeping a copy under its own name. */
   unkeep(name: string) { this.queue({ kind: 'library.unkeep', args: { name } }, { kind: 'library.rebuild' }); }

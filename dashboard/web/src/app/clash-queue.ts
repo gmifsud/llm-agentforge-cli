@@ -7,7 +7,7 @@ import { Store, type QueueRow, type Skill, type Suggestion } from './store';
  * each copy that differs. Used on the Skills page and above the cards on the compare page.
  */
 @Component({ selector: 'af-clash-row', imports: [RouterLink], template: `
-  <article class="clash-item" [attr.aria-label]="'Name clash: ' + row().collision.name">
+  <article class="clash-item" tabindex="-1" [attr.id]="'clash-' + row().collision.name" [attr.aria-label]="'Name clash: ' + row().collision.name">
     <header class="clash-head">
       <h3>{{ row().collision.name }}</h3>
       <span class="fine">{{ differing() }} {{ differing() === 1 ? 'copy differs' : 'copies differ' }}</span>
@@ -191,6 +191,18 @@ export class ClashRow {
 ` })
 export class ClashQueue {
   s = inject(Store);
+  constructor() {
+    // Rename on a kept copy sends us here: make sure that clash's row is showing, then bring it into view and focus it.
+    effect(() => {
+      const name = this.s.focusedClash(); if (!name) return;
+      untracked(() => {
+        this.skipped.update(set => { const next = new Set(set); next.delete(name); return next; });
+        if (this.resolved().some(r => r.collision.name === name)) this.showResolved.set(true);
+        this.s.focusedClash.set('');
+        setTimeout(() => { const el = document.getElementById('clash-' + name); el?.scrollIntoView({ block: 'center' }); el?.focus(); });
+      });
+    });
+  }
   readonly emptySet = new Set<string>();
   /** Component-local, so it resets on reload. */
   skipped = signal<Set<string>>(this.emptySet);

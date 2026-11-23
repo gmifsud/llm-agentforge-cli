@@ -1,14 +1,15 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { Store, type Shadow, type SkillView } from './store';
+import { Store, type Shadow, type Skill, type SkillView } from './store';
 import { differenceText } from './skill-actions';
 import { SetAsideList } from './set-aside-list';
 import { ClashQueue } from './clash-queue';
+import { KeptIssueRow } from './kept-issues';
 
 const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
 
-@Component({ selector: 'af-library', imports: [DatePipe, RouterLink, SetAsideList, ClashQueue], template: `
+@Component({ selector: 'af-library', imports: [DatePipe, RouterLink, SetAsideList, ClashQueue, KeptIssueRow], template: `
   <header class="page-head">
     <h1>Skill library</h1>
     <p>Every skill found in your vault and attached repositories, and why each one is or is not what your agents get.</p>
@@ -38,6 +39,11 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
     <div class="split" [class.detail-open]="detail()">
       <section class="list" aria-label="Skills">
         @if (s.view() === 'collisions') { <af-clash-queue /> } @else {
+        @if (s.view() === 'attention' && keptRows().length) {
+          <section class="kept-issues" aria-label="Kept copies that need a look">
+            @for (row of keptRows(); track row.key) { <af-kept-issue [issue]="row.issue!" /> }
+          </section>
+        }
         <p class="count" role="status">{{ s.filteredSkills().length }} {{ s.filteredSkills().length === 1 ? 'skill' : 'skills' }}</p>
         <table>
           <thead><tr><th scope="col">Skill</th><th scope="col">Source</th><th scope="col">What your agents get</th></tr></thead>
@@ -78,6 +84,7 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
             <p>{{ col.candidateIds.length }} sources have a skill called {{ col.name }}.
               <a class="button quiet tiny" [routerLink]="['/compare', col.name]">Compare the copies</a></p>
           }
+          @for (issue of issuesFor(skill); track issue.name) { <af-kept-issue [issue]="issue" /> }
           @if (s.findingsFor(skill.id).length || s.shadowsFor(skill.id).length) {
             <section class="findings" aria-label="Problems">
               <h3>Problems</h3>
@@ -124,6 +131,11 @@ export class Library {
   view(value: SkillView) { this.s.view.set(value); this.s.page.set(0); }
   select(id: string) { this.s.selectSkill(id); this.detail.set(true); }
   back() { this.detail.set(false); setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-skill="${this.s.skillId()}"]`)?.focus()); }
+  keptRows = computed(() => this.s.attention().filter(r => r.issue));
+  /** Issues about this skill: it is the kept copy, or the original a kept copy was made from. */
+  issuesFor(skill: Skill) {
+    return (this.s.catalog()?.keptIssues || []).filter(i => (skill.kept ? i.name === skill.name : !!i.fromSourceId && i.fromSourceId === skill.sourceId && i.fromSkill.toLowerCase() === skill.name.toLowerCase()));
+  }
   slash(p: string) { return p.split('\\').join('/'); }
   problemCount() { const h = this.s.catalog()?.health; return h ? new Set([...h.findings.filter(f => f.severity !== 'info').map(f => f.skillId), ...h.shadows.map(x => x.skillId)]).size : 0; }
   toolName(t: string) { return TOOL[t] || t; }

@@ -36,7 +36,7 @@ const { createHash } = require('node:crypto');
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 /** Steps whose failure never cancels the others: updating one source, or asking one tool. */
 const INDEPENDENT = new Set(['source.fetch', 'project.verify']);
-const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.keep', 'library.unkeep', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove', 'skill.setaside', 'skill.restore', 'project.adopt'];
+const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.keep', 'library.unkeep', 'library.rekeep', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove', 'skill.setaside', 'skill.restore', 'project.adopt'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -343,6 +343,52 @@ class WriteService {
         const kept = (fresh.kept || []).filter(r => nameKey(r.name) !== nameKey(rule.name));
         const next = { ...fresh };
         if (kept.length) next.kept = kept; else delete next.kept;
+        saveConfig(this.paths, next);
+      } };
+  }
+
+  /**
+   * Accept that a kept copy's original changed: re-pin the rule to the original as it is now, optionally with a new
+   * description, and re-pin the clash's own choice too, so one change to an original leaves one row to look at.
+   */
+  library_rekeep(args) {
+    const name = str(args.name, 'Kept copy', { max: 200 });
+    const hasDescription = typeof args.description === 'string';
+    const description = hasDescription ? args.description.trim() : null;
+    const config = this.config();
+    const rule = (config.kept || []).find(r => nameKey(r.name) === nameKey(name));
+    if (!rule) throw new ReadError(ERROR.NOT_FOUND, `No kept copy called "${name}".`, 404);
+    const label = s => (s === 'vault' ? 'your vault' : s);
+    const clashOf = cfg => this.viewFor(cfg, { preferences: cfg.preferences || {} }).clashes.find(c => nameKey(c.name) === nameKey(rule.from.skill));
+    const conflicts = [];
+    const original = clashOf(config)?.candidates.find(c => c.source === rule.from.source);
+    if (!original) conflicts.push('The original is gone; remove the copy instead.');
+    else if (original.digest === null) conflicts.push(`${label(rule.from.source)}'s ${rule.from.skill} cannot be read, so it cannot be re-pinned.`);
+    if (hasDescription) {
+      const problem = checkDescription(description);
+      if (problem) conflicts.push(`The description of ${rule.name} ${problem}.`);
+    }
+    const lines = conflicts.length ? [] : [
+      { tone: 'change', text: `${rule.name} now follows ${label(rule.from.source)}'s ${rule.from.skill} as it is today.` },
+      hasDescription ? { tone: 'change', text: 'The description is replaced.' } : { tone: 'note', text: 'The description stays as it is.' },
+      { tone: 'note', text: 'Saved in ~/.agentforge/config.json. The copy is rebuilt with the next library rebuild.' },
+    ];
+    return { title: `Keep ${rule.name} as it is`, lines, conflicts, ok: conflicts.length === 0, args: hasDescription ? { name: rule.name, description } : { name: rule.name },
+      run: () => {
+        const fresh = this.config();
+        const current = (fresh.kept || []).find(r => nameKey(r.name) === nameKey(rule.name));
+        if (!current) throw refused('KEPT_CHANGED', `${rule.name} is no longer kept. Look again.`);
+        const clash = clashOf(fresh);
+        const now = clash?.candidates.find(c => c.source === current.from.source);
+        if (!now || now.digest === null) throw refused('KEPT_CHANGED', 'The original is gone; remove the copy instead.');
+        const kept = (fresh.kept || []).map(r => (r === current ? { ...r, digest: now.digest, ...(hasDescription ? { description } : {}) } : r));
+        const next = { ...fresh, kept };
+        const prefs = fresh.preferences || {};
+        const prefKey = Object.keys(prefs).find(k => nameKey(k) === nameKey(rule.from.skill));
+        if (prefKey && prefs[prefKey] && typeof prefs[prefKey] === 'object' && prefs[prefKey].digests) {
+          next.preferences = { ...prefs, [prefKey]: { ...prefs[prefKey], digests: Object.fromEntries(clash.candidates.map(c => [c.source, c.digest])) } };
+        }
+        try { validateKept(kept, this.paths.configJson); } catch (e) { throw refused('CONFIG_INVALID', message(e)); }
         saveConfig(this.paths, next);
       } };
   }
