@@ -2,8 +2,8 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { savedChangesPreference, saveChangesPreference } from './changes-presentation';
-import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
-export type { Catalog, Context, Skill, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, DiffHunk, LintFinding } from '../../../contracts';
+import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, Suggestion, SuggestResponse, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
+export type { Catalog, Context, Skill, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, Suggestion, DiffHunk, LintFinding } from '../../../contracts';
 
 export const PAGE_SIZE = 50;
 const API = '/api/v1';
@@ -26,6 +26,9 @@ export interface QueueRow { collision: Collision; main: Skill; others: { skill: 
 const KEPT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const KEPT_NAME_MAX = 64;
 const KEPT_DESCRIPTION_MAX = 900;
+/** The server runs two suggestions at a time; asking for more only earns a BUSY reply. */
+const SUGGEST_CONCURRENCY = 2;
+const SUGGEST_BUSY_RETRY_MS = 2000;
 
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
@@ -170,6 +173,64 @@ export class Store {
     if (/[\r\n]/.test(description)) return 'must be a single paragraph with no line breaks';
     if (description.length > KEPT_DESCRIPTION_MAX) return `at most ${KEPT_DESCRIPTION_MAX} characters`;
     return null;
+  }
+
+  // ─── suggested names ───────────────────────────────────────────────────────
+  /** Claude's (or the fallback's) suggestions per clash name. The queue fills untouched fields from these; nothing here changes the library. */
+  suggestions = signal<Map<string, Suggestion[]>>(new Map());
+  /** While suggestAll runs, and left in place afterwards: clashes handled (suggested or failed) out of those it set out to do. */
+  suggestProgress = signal<{ done: number; total: number } | null>(null);
+  /** Clashes asked about right now, by name. */
+  suggesting = signal<ReadonlySet<string>>(new Set());
+  /** Why a clash could not be suggested, by name. */
+  suggestErrors = signal<Map<string, string>>(new Map());
+  /** True while suggestAll is working through its list. */
+  suggestRunning = signal(false);
+  private sleep(ms: number) { return new Promise<void>(resolve => setTimeout(resolve, ms)); }
+
+  /** Clashes that still need a decision and have nothing suggested yet, in queue order. `only` limits them to the names a page is showing. */
+  suggestTargets(only?: readonly string[]): QueueRow[] {
+    return this.queueRows().filter(r => !r.collision.resolved && !r.planned && r.others.length > 0 && !this.suggestions().has(r.collision.name) && (!only || only.includes(r.collision.name)));
+  }
+
+  /** One short question per clash, at most two at a time. A BUSY reply is tried once more after two seconds; any other failure is kept against that clash and the rest carry on. */
+  async suggestAll(only?: readonly string[]): Promise<void> {
+    if (this.suggestRunning()) return;
+    const targets = this.suggestTargets(only).map(r => r.collision.name);
+    if (!targets.length) return;
+    this.suggestRunning.set(true);
+    this.suggestProgress.set({ done: 0, total: targets.length });
+    const queue = [...targets];
+    const worker = async () => {
+      for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+        await this.suggestClash(name, false, undefined, true);
+        this.suggestProgress.update(p => p && { ...p, done: p.done + 1 });
+      }
+    };
+    try { await Promise.all(Array.from({ length: Math.min(SUGGEST_CONCURRENCY, targets.length) }, worker)); }
+    finally { this.suggestRunning.set(false); }
+  }
+
+  /** Ask about one clash. `fresh` bypasses the server's cache; `main` is the copy keeping the plain name when the person has chosen another than the row's. */
+  suggestOne(skill: string, fresh = false, main?: Source): Promise<void> { return this.suggestClash(skill, fresh, main, false); }
+  private async suggestClash(skill: string, fresh: boolean, main: Source | undefined, retryBusy: boolean): Promise<void> {
+    const row = this.queueRows().find(r => r.collision.name === skill);
+    const mainSource = main || (row ? this.sourceById(row.main.sourceId) : null);
+    if (!mainSource) return;
+    this.suggesting.update(set => new Set(set).add(skill));
+    this.suggestErrors.update(m => { const next = new Map(m); next.delete(skill); return next; });
+    const ask = () => this.post<SuggestResponse>('/suggest', { skill, main: mainSource.key, ...(fresh ? { fresh: true } : {}) });
+    try {
+      let res: SuggestResponse;
+      try { res = await ask(); }
+      catch (e: any) {
+        if (!retryBusy || e?.error?.error?.code !== 'BUSY') throw e;
+        await this.sleep(SUGGEST_BUSY_RETRY_MS);
+        res = await ask();
+      }
+      this.suggestions.update(m => new Map(m).set(skill, res.suggestions));
+    } catch (e) { this.suggestErrors.update(m => new Map(m).set(skill, message(e))); }
+    finally { this.suggesting.update(set => { const next = new Set(set); next.delete(skill); return next; }); }
   }
 
   // ─── source order ──────────────────────────────────────────────────────────

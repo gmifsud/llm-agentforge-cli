@@ -1,6 +1,6 @@
-import { Component, computed, inject, input, output, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { Store, type QueueRow, type Skill } from './store';
+import { Store, type QueueRow, type Skill, type Suggestion } from './store';
 
 /**
  * One name clash, settled in place: pick the copy that keeps the plain name, then type a name and a description for
@@ -37,6 +37,7 @@ import { Store, type QueueRow, type Skill } from './store';
                 <label [for]="'keep-name-' + skill.id">Keep as</label>
                 <input [id]="'keep-name-' + skill.id" [value]="name(skill)" (input)="setName(skill, $any($event.target).value)"
                        [disabled]="row().planned || s.changesLocked()" [attr.aria-invalid]="nameError(skill) ? 'true' : null" [attr.aria-describedby]="'keep-name-err-' + skill.id" autocomplete="off" spellcheck="false">
+                @if (origin(skill); as label) { <p class="fine origin">{{ label }}</p> }
                 @if (nameError(skill)) { <p class="field-error" role="alert" [id]="'keep-name-err-' + skill.id">{{ nameError(skill) }}</p> }
                 <label [for]="'keep-desc-' + skill.id">Description</label>
                 <textarea [id]="'keep-desc-' + skill.id" rows="3" [value]="description(skill)" (input)="setDescription(skill, $any($event.target).value)"
@@ -50,10 +51,12 @@ import { Store, type QueueRow, type Skill } from './store';
         }
       </fieldset>
       @if (differs(); as d) { <p class="fine">Differs: {{ d }}</p> }
+      @if (suggestError(); as why) { <p class="field-error" role="alert">Could not suggest names: {{ why }}</p> }
       @if (row().planned) { <p class="planned-note">Will be kept when you apply</p> }
       <div class="actions">
         <button type="button" class="primary" (click)="approve()" [disabled]="!ready() || row().planned || s.changesLocked()">Approve</button>
         <button type="button" class="quiet" (click)="keepOnlyOne()" [disabled]="row().planned || s.changesLocked()">Keep only one</button>
+        <button type="button" class="quiet" (click)="suggestAgain()" [disabled]="row().planned || !entries().length || suggestingNow()">{{ suggestingNow() ? 'Suggesting…' : suggested() ? 'Suggest again' : 'Suggest names' }}</button>
         @if (canSkip()) { <button type="button" class="quiet" (click)="skip.emit(row().collision.name)">Skip</button> }
       </div>
     }
@@ -70,6 +73,24 @@ export class ClashRow {
   mainId = signal<string | null>(null);
   private names = signal<Record<string, string>>({});
   private descriptions = signal<Record<string, string>>({});
+  private nameEdited = signal<Record<string, boolean>>({});
+  private descriptionEdited = signal<Record<string, boolean>>({});
+
+  constructor() {
+    // Fill what the person has not typed from the suggestions for this clash, whenever they arrive or the copies change.
+    effect(() => {
+      const suggestions = this.s.suggestions().get(this.row().collision.name);
+      const entries = this.entries();
+      if (!suggestions) return;
+      untracked(() => {
+        for (const o of entries) {
+          const suggestion = this.suggestionFor(o.skill); if (!suggestion) continue;
+          if (!this.nameEdited()[o.skill.id]) this.names.update(m => ({ ...m, [o.skill.id]: suggestion.name }));
+          if (!this.descriptionEdited()[o.skill.id]) this.descriptions.update(m => ({ ...m, [o.skill.id]: suggestion.description }));
+        }
+      });
+    });
+  }
 
   main = computed(() => (this.mainId() && this.row().collision.candidateIds.includes(this.mainId()!) ? this.s.skillById(this.mainId()!) : null) || this.row().main);
   entries = computed(() => this.s.othersFor(this.row().collision, this.main()));
@@ -81,8 +102,9 @@ export class ClashRow {
   alsoNames(also: Skill[]) { return also.map(a => this.s.sourceName(a.sourceId)).join(', '); }
   name(skill: Skill) { return this.names()[skill.id] ?? ''; }
   description(skill: Skill) { return this.descriptions()[skill.id] ?? ''; }
-  setName(skill: Skill, value: string) { this.names.update(m => ({ ...m, [skill.id]: value })); }
-  setDescription(skill: Skill, value: string) { this.descriptions.update(m => ({ ...m, [skill.id]: value })); }
+  /** Typing marks a field as the person's own; a suggestion never replaces it. */
+  setName(skill: Skill, value: string) { this.names.update(m => ({ ...m, [skill.id]: value })); this.nameEdited.update(m => ({ ...m, [skill.id]: true })); }
+  setDescription(skill: Skill, value: string) { this.descriptions.update(m => ({ ...m, [skill.id]: value })); this.descriptionEdited.update(m => ({ ...m, [skill.id]: true })); }
 
   /** Shown once something is typed; an empty field only keeps Approve disabled. */
   nameError(skill: Skill): string {
@@ -95,8 +117,27 @@ export class ClashRow {
   descriptionError(skill: Skill): string { return this.description(skill) ? this.s.descriptionProblem(this.description(skill)) || '' : ''; }
   ready = computed(() => this.entries().length > 0 && this.entries().every(o =>
     !!this.name(o.skill) && !this.nameError(o.skill) && !this.s.descriptionProblem(this.description(o.skill))));
-  /** What differs between the copies. Filled in once the catalogue reports it. */
-  differs() { return ''; }
+  /** The suggestion for the copy that stands for this entry: the one made for its source. */
+  suggestionFor(skill: Skill): Suggestion | null {
+    const key = this.s.sourceById(skill.sourceId)?.key;
+    return key ? this.s.suggestions().get(this.row().collision.name)?.find(x => x.source === key) || null : null;
+  }
+  /** Where an entry's text came from. Typing in either field makes it the person's own. */
+  origin(skill: Skill): string {
+    if (this.nameEdited()[skill.id] || this.descriptionEdited()[skill.id]) return 'typed by you';
+    const by = this.suggestionFor(skill)?.by;
+    return by === 'fallback' ? 'fallback suggestion' : by ? 'suggested by Claude' : '';
+  }
+  /** What differs between the copies, as suggested; each copy is named when there is more than one. */
+  differs(): string {
+    const parts = this.entries().flatMap(o => { const d = this.suggestionFor(o.skill)?.difference; return d ? [{ source: this.s.sourceName(o.skill.sourceId), d }] : []; });
+    return parts.length > 1 ? parts.map(p => `${p.source}: ${p.d}`).join('; ') : parts[0]?.d || '';
+  }
+  suggested = computed(() => this.s.suggestions().has(this.row().collision.name));
+  suggestingNow = computed(() => this.s.suggesting().has(this.row().collision.name));
+  suggestError = computed(() => this.s.suggestErrors().get(this.row().collision.name) || '');
+  /** Ask again, bypassing the cache. Fields the person has typed in are left alone. */
+  suggestAgain() { void this.s.suggestOne(this.row().collision.name, true, this.s.sourceById(this.main().sourceId) || undefined); }
 
   approve() {
     if (!this.ready()) return;
@@ -117,6 +158,22 @@ export class ClashRow {
       <h2 id="h-clash-queue">Name clashes</h2>
       <p class="fine" role="status">{{ undecided().length }} to decide · {{ resolved().length }} resolved</p>
     </header>
+    @if (targets().length || s.suggestProgress()) {
+      <div class="suggest-bar">
+        @if (confirming()) {
+          <div class="suggest-confirm" role="group" aria-label="Confirm suggestions">
+            <p>Sends one short question per clash to Claude on your account. Nothing changes until you approve and apply.</p>
+            <div class="actions">
+              <button type="button" class="primary" (click)="suggestAll()">Suggest names</button>
+              <button type="button" class="quiet" (click)="confirming.set(false)">Cancel</button>
+            </div>
+          </div>
+        } @else if (targets().length) {
+          <button type="button" class="quiet" (click)="confirming.set(true)" [disabled]="s.suggestRunning()">Suggest names for {{ targets().length }}</button>
+        }
+        @if (s.suggestProgress(); as p) { <p class="fine" role="status">{{ p.done }} of {{ p.total }} clashes suggested</p> }
+      </div>
+    }
     @for (row of undecided(); track row.collision.name) {
       <af-clash-row [row]="row" [canSkip]="true" (skip)="skip($event)" />
     }
@@ -143,5 +200,9 @@ export class ClashQueue {
   private open = computed(() => this.all().filter(r => !r.collision.resolved));
   undecided = computed(() => this.open().filter(r => !this.skipped().has(r.collision.name)));
   skip(name: string) { this.skipped.update(set => new Set(set).add(name)); }
+  /** Clashes shown here that have no suggestion yet. */
+  targets = computed(() => this.s.suggestTargets(this.undecided().map(r => r.collision.name)));
+  confirming = signal(false);
+  suggestAll() { this.confirming.set(false); void this.s.suggestAll(this.undecided().map(r => r.collision.name)); }
   skippedCount = computed(() => this.open().length - this.undecided().length);
 }

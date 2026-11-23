@@ -4,7 +4,7 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { provideRouter } from '@angular/router';
 import { Store, type Catalog } from './store';
 import { Library } from './library';
-import { ClashRow } from './clash-queue';
+import { ClashRow, ClashQueue } from './clash-queue';
 import { CHANGES_PREFERENCE_KEY } from './changes-presentation';
 
 const library = { path: 'lib', built: true, builtAt: '', invalid: false, size: 1, add: [], remove: [], change: [], inSync: true };
@@ -384,6 +384,144 @@ describe('client state', () => {
       approve().click();
       expect(store.tray()[0].change.args).toEqual({ skill: 'brainstorming', main: 'vault', keep: [{ source: 'alpha', name: 'brainstorming-gate', description: 'Adds a gate.' }] });
       http.match('/api/v1/changes/preview');
+    });
+
+    describe('suggestions', () => {
+      const URL = '/api/v1/suggest';
+      const threeOpen = () => { const c = keepCatalog(); return { ...c, collisions: c.collisions.map(x => x.name === 'x' ? { ...x, resolved: false } : x) }; };
+      const suggestion = (source: string, name: string, over: Record<string, string> = {}) => ({ source, name, description: `About ${name}.`, difference: `${name} differs`, by: 'claude', ...over });
+      const busy = () => ({ error: { code: 'BUSY', message: 'Two suggestions are already running.', retryable: true } });
+      afterEach(() => vi.useRealTimers());
+
+      it('suggestAll never has more than two requests open, and progress counts clashes', async () => {
+        store.catalog.set(threeOpen());
+        const run = store.suggestAll();
+        await settle();
+        const open = http.match(URL);
+        expect(open.map(r => r.request.body)).toEqual([{ skill: 'tdd', main: 'alpha' }, { skill: 'x', main: 'alpha' }]);
+        expect(open[0].request.headers.get('X-Agentforge-Write')).toBe('1');
+        expect(store.suggestProgress()).toEqual({ done: 0, total: 3 });
+        open[0].flush({ suggestions: [suggestion('vault', 'tdd-gate')] });
+        await settle();
+        expect(store.suggestProgress()).toEqual({ done: 1, total: 3 });
+        const third = http.match(URL);
+        expect(third.map(r => r.request.body)).toEqual([{ skill: 'brainstorming', main: 'vault' }]);
+        open[1].flush({ suggestions: [suggestion('beta', 'x-b')] });
+        third[0].flush({ suggestions: [suggestion('alpha', 'brainstorming-gate')] });
+        await run;
+        expect(store.suggestProgress()).toEqual({ done: 3, total: 3 });
+        expect([...store.suggestions().keys()].sort()).toEqual(['brainstorming', 'tdd', 'x']);
+        http.expectNone(URL);
+      });
+
+      it('suggestAll leaves out clashes that already have suggestions or are not in the names given', async () => {
+        store.catalog.set(threeOpen());
+        store.suggestions.set(new Map([['tdd', [suggestion('vault', 'tdd-gate') as any]]]));
+        const run = store.suggestAll(['tdd', 'x']);
+        await settle();
+        const open = http.match(URL);
+        expect(open.map(r => r.request.body.skill)).toEqual(['x']);
+        open[0].flush({ suggestions: [suggestion('beta', 'x-b')] });
+        await run;
+        expect(store.suggestProgress()).toEqual({ done: 1, total: 1 });
+      });
+
+      it('retries a BUSY reply once after two seconds, and then gives up on that clash without stopping the run', async () => {
+        vi.useFakeTimers();
+        store.catalog.set(threeOpen());
+        const run = store.suggestAll(['tdd', 'x']);
+        await vi.advanceTimersByTimeAsync(0);
+        const first = http.match(URL);
+        expect(first.length).toBe(2);
+        first[0].flush(busy(), { status: 503, statusText: 'Busy' });
+        first[1].flush({ suggestions: [suggestion('beta', 'x-b')] });
+        await vi.advanceTimersByTimeAsync(1999);
+        http.expectNone(URL);
+        await vi.advanceTimersByTimeAsync(1);
+        const retry = http.match(URL);
+        expect(retry.map(r => r.request.body.skill)).toEqual(['tdd']);
+        retry[0].flush(busy(), { status: 503, statusText: 'Busy' });
+        await run;
+        expect(store.suggestions().has('x')).toBe(true);
+        expect(store.suggestions().has('tdd')).toBe(false);
+        expect(store.suggestErrors().get('tdd')).toMatch(/already running/);
+        expect(store.suggestProgress()).toEqual({ done: 2, total: 2 });
+        http.expectNone(URL);
+      });
+
+      it('a suggestion fills only fields the owner has not typed in, and Suggest again refills the rest', async () => {
+        store.catalog.set(keepCatalog());
+        const row = store.queueRows().find(r => r.collision.name === 'brainstorming')!;
+        const fixture = TestBed.createComponent(ClashRow);
+        fixture.componentRef.setInput('row', row);
+        await fixture.whenStable();
+        const host: HTMLElement = fixture.nativeElement;
+        const input = (id: string) => host.querySelector(id) as HTMLInputElement & HTMLTextAreaElement;
+        const type = async (el: HTMLInputElement | HTMLTextAreaElement, value: string) => { el.value = value; el.dispatchEvent(new Event('input')); fixture.detectChanges(); await fixture.whenStable(); };
+        await type(input('#keep-name-b-a'), 'brainstorming-mine');
+        const first = store.suggestOne('brainstorming');
+        await settle();
+        http.expectOne(URL).flush({ suggestions: [suggestion('alpha', 'brainstorming-claude', { difference: 'adds a gate' })] });
+        await first; fixture.detectChanges(); await fixture.whenStable();
+        expect(input('#keep-name-b-a').value).toBe('brainstorming-mine');
+        expect(input('#keep-desc-b-a').value).toBe('About brainstorming-claude.');
+        expect(host.textContent).toContain('Differs: adds a gate');
+        expect(host.querySelector('.origin')?.textContent).toContain('typed by you');
+        await type(input('#keep-desc-b-a'), 'Typed description.');
+        const again = [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Suggest again') as HTMLButtonElement;
+        again.click();
+        await settle();
+        const req = http.expectOne(URL);
+        expect(req.request.body).toEqual({ skill: 'brainstorming', main: 'vault', fresh: true });
+        req.flush({ suggestions: [suggestion('alpha', 'brainstorming-new', { by: 'fallback' })] });
+        await settle(); fixture.detectChanges(); await fixture.whenStable();
+        expect(input('#keep-name-b-a').value).toBe('brainstorming-mine');
+        expect(input('#keep-desc-b-a').value).toBe('Typed description.');
+      });
+
+      it('the queue asks for confirmation before sending anything, then shows progress', async () => {
+        store.catalog.set(threeOpen());
+        const fixture = TestBed.createComponent(ClashQueue);
+        await fixture.whenStable();
+        const host: HTMLElement = fixture.nativeElement;
+        const button = (label: string) => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === label) as HTMLButtonElement;
+        const click = async (b: HTMLButtonElement) => { b.click(); fixture.detectChanges(); await fixture.whenStable(); };
+        await click(button('Suggest names for 3'));
+        expect(host.textContent).toContain('Sends one short question per clash to Claude on your account. Nothing changes until you approve and apply.');
+        http.expectNone(URL);
+        await click(button('Cancel'));
+        expect(button('Suggest names for 3')).toBeTruthy();
+        await click(button('Suggest names for 3'));
+        await click(button('Suggest names'));
+        await settle();
+        const open = http.match(URL);
+        expect(open.length).toBe(2);
+        fixture.detectChanges();
+        expect(host.textContent).toContain('0 of 3 clashes suggested');
+        open[0].flush({ suggestions: [] }); open[1].flush({ suggestions: [] });
+        await settle();
+        for (const r of http.match(URL)) r.flush({ suggestions: [] });
+        await settle();
+        fixture.detectChanges();
+        expect(host.textContent).toContain('3 of 3 clashes suggested');
+      });
+
+      it('an untouched row shows the suggestion and says who made it', async () => {
+        store.catalog.set(keepCatalog());
+        const row = store.queueRows().find(r => r.collision.name === 'brainstorming')!;
+        const fixture = TestBed.createComponent(ClashRow);
+        fixture.componentRef.setInput('row', row);
+        await fixture.whenStable();
+        const host: HTMLElement = fixture.nativeElement;
+        const run = store.suggestOne('brainstorming');
+        await settle();
+        http.expectOne(URL).flush({ suggestions: [suggestion('alpha', 'brainstorming-fb', { by: 'fallback' })] });
+        await run; fixture.detectChanges(); await fixture.whenStable();
+        expect((host.querySelector('#keep-name-b-a') as HTMLInputElement).value).toBe('brainstorming-fb');
+        expect(host.querySelector('.origin')?.textContent).toContain('fallback suggestion');
+        const approve = [...host.querySelectorAll('button')].find(b => b.textContent === 'Approve') as HTMLButtonElement;
+        expect(approve.disabled).toBe(false);
+      });
     });
 
     it('copies the previewed digests into the queued keep, so Apply sends what the person saw', async () => {
