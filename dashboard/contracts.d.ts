@@ -103,3 +103,6 @@ export interface ChangePreview { kind: ChangeKind; title: string; lines: ChangeL
 /** uncertain: the client sent a change but did not receive its outcome; it may have applied. */
 export interface ChangeResult { kind: ChangeKind; title: string; status: 'applied' | 'refused' | 'failed' | 'skipped' | 'uncertain'; lines: ChangeLine[]; message: string }
 export interface ApplyResponse { results: ChangeResult[] }
+
+export interface Suggestion { source: string; name: string; description: string; difference: string; by: 'claude' | 'fallback' | 'cache' }
+export interface SuggestResponse { suggestions: Suggestion[] }
