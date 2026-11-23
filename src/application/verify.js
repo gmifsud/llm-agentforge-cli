@@ -105,9 +105,10 @@ function resolveCommand(command) {
   const e = new Error(`${command} not found`); e.code = 'ENOENT'; throw e;
 }
 
-function runTool(command, args, { cwd, timeoutMs }) {
+/** `input` is written to the tool's standard input: the way to hand it text that must not pass through a command line. */
+function runTool(command, args, { cwd, timeoutMs, input = '' }) {
   const resolved = resolveCommand(command);
-  const opts = { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, shell: false, input: '', windowsHide: true };
+  const opts = { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, shell: false, input, windowsHide: true };
   let res;
   if (resolved.kind === 'exe') res = spawnSync(resolved.file, args, opts);
   // A PowerShell script takes its arguments as an array through -File: nothing is re-parsed as a command line.
@@ -121,4 +122,4 @@ function runTool(command, args, { cwd, timeoutMs }) {
   return `${res.stdout || ''}\n${res.stderr || ''}`;
 }
 
-module.exports = { verifyTarget, sampleSkills, question, TOOLS, DEFAULT_TOOL };
+module.exports = { verifyTarget, runTool, sampleSkills, question, TOOLS, DEFAULT_TOOL };
