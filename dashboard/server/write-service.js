@@ -165,8 +165,16 @@ class WriteService {
     else lines.push({ tone: 'remove', text: `Delete the downloaded copy in ${cacheRootFor(this.paths, repo)}` });
     const root = sourceRootFor(this.paths, repo);
     if (fs.existsSync(root)) {
-      const leaving = this.view().entries.filter(e => e.source === name).map(e => e.name);
+      // What leaves is what the library holds now and would not hold without this source: a name another copy
+      // takes stays, and a kept copy whose rule stops working (its original becomes the main copy) leaves.
+      const config = this.config();
+      const now = this.view(config).entries;
+      const without = new Set(this.viewFor(config, { preferences: config.preferences || {}, repos: this.registry().filter(r => r.name !== name) }).entries.map(e => nameKey(e.name)));
+      const gone = now.filter(e => !without.has(nameKey(e.name)));
+      const leaving = gone.filter(e => !e.kept).map(e => e.name);
       if (leaving.length) lines.push({ tone: 'warn', text: `${plural(leaving.length, 'skill')} leave the library when it is rebuilt: ${list(leaving)}` });
+      const label = s => (s === 'vault' ? 'your vault' : s);
+      for (const e of gone.filter(x => x.kept)) lines.push({ tone: 'remove', text: `The kept copy ${e.name} (${label(e.kept.from.source)}'s ${e.kept.from.skill}) leaves the library at the next rebuild` });
     }
     return { title: `Detach ${name}`, lines, conflicts: [], ok: true, args: { name },
       run: () => { removeSource({ paths: this.paths, name }); } };

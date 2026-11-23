@@ -218,3 +218,16 @@ test('library.rekeep refuses at apply time when the original changed since the p
   assert.match(r.message, /changed since you looked/);
   assert.deepEqual(readConfig(f).kept[0], before);
 });
+
+test('detaching the main copy\'s source names the kept copy that leaves, and not the plain name another copy takes', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  const [r] = apply(svc, keep({ main: 'frontend-lab', keep: [{ source: 'vault', name: 'frontend-design-vault', description: 'The vault copy.' }] }));
+  assert.equal(r.status, 'applied', r.message);
+  const p = svc.preview({ kind: 'source.detach', args: { name: 'frontend-lab' } });
+  const texts = p.lines.map(l => l.text);
+  assert.ok(p.lines.some(l => ['remove', 'warn'].includes(l.tone) && /frontend-design-vault/.test(l.text)), texts.join(' | '));
+  const leaving = texts.find(x => /leave the library when it is rebuilt/.test(x)) || '';
+  assert.doesNotMatch(leaving, /frontend-design(?![-\w])/, 'the copy in the vault takes the plain name, so it does not leave');
+  assert.match(leaving, /browser-testing/, 'a skill only that source has still leaves');
+});
