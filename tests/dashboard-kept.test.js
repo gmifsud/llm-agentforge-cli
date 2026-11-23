@@ -246,3 +246,17 @@ test('a description is saved as agents will read it: runs of spaces and tabs bec
   assert.equal(svc.preview(keep({ keep: [{ ...KEEP.keep[0], description: 'one\ntwo' }] })).ok, false);
   assert.equal(svc.preview({ kind: 'library.rekeep', args: { name: 'frontend-design-lab', description: 'one\ntwo' } }).ok, false);
 });
+
+test('a rebuild that cannot remove the previous kept copies still applies, and says which folder is left over', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  apply(svc, keep(), { kind: 'library.rebuild' });
+  const rmSync = fs.rmSync;
+  t.mock.method(fs, 'rmSync', (p, o) => { if (/kept\.old-\d+$/.test(String(p))) throw new Error('EBUSY: resource busy'); return rmSync(p, o); });
+  const [r] = apply(svc, { kind: 'library.rebuild' });
+  t.mock.restoreAll();
+  const old = path.join(f.homedir, '.agentforge', `kept.old-${process.pid}`);
+  assert.equal(r.status, 'applied', r.message);
+  assert.ok(r.lines.some(l => l.tone === 'warn' && l.text.includes(old)), JSON.stringify(r.lines));
+  fs.rmSync(old, { recursive: true, force: true });
+});

@@ -164,3 +164,25 @@ test('repo sync --no-fetch builds kept copies and says so; with no rules it stay
   assert.match(sync.err + sync.out, /tdd-gone: kept copy not built \(original not found\)/);
   assert.ok(fs.existsSync(path.join(home, '.agentforge', 'kept', 'tdd-ext', 'SKILL.md')));
 });
+
+test('repo sync warns about a previous kept folder it could not remove, and still succeeds', (t) => {
+  const root = tempRoot(t);
+  const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.agentforge'), { recursive: true });
+  const vault = makeVault(root, 'vault', ['tdd']);
+  const ext = makeVault(root, 'ext', ['tdd']);
+  const env = { AGENTFORGE_VAULT_ROOT: vault };
+  assert.equal(cli(['repo', 'add', ext, '--name', 'ext'], { home, env }).code, 0);
+  const { digestSkill } = require('../src/discovery/skill-digest');
+  const rule = { name: 'tdd-ext', from: { skill: 'tdd', source: 'ext' }, description: 'The ext copy.', digest: digestSkill(path.join(ext, 'tdd')).digest, keptAt: 'now' };
+  fs.writeFileSync(path.join(home, '.agentforge', 'config.json'), JSON.stringify({ kept: [rule] }));
+  assert.equal(cli(['repo', 'sync', '--no-fetch'], { home, env }).code, 0);
+  const rmSync = fs.rmSync;
+  t.mock.method(fs, 'rmSync', (p, o) => { if (/kept\.old-\d+$/.test(String(p))) throw new Error('EBUSY: resource busy'); return rmSync(p, o); });
+  const sync = cli(['repo', 'sync', '--no-fetch'], { home, env });
+  t.mock.restoreAll();
+  assert.equal(sync.code, 0, sync.err);
+  const old = path.join(home, '.agentforge', `kept.old-${process.pid}`);
+  assert.match(sync.err + sync.out, /could not remove the previous kept copies/);
+  assert.ok((sync.err + sync.out).includes(old));
+  fs.rmSync(old, { recursive: true, force: true });
+});

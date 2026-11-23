@@ -323,6 +323,7 @@ const KEPT_REASONS = { taken: 'name taken by another skill', 'is-main': 'its ori
 
 /** Kept copies built with the library; shown only when there are rules. Each rule that could not be built is warned about. */
 function printKept(kept, dryRun, log) {
+  if (kept.leftover) log.warn(`could not remove the previous kept copies at ${kept.leftover}; delete that folder before the next build`);
   const rules = kept.built.length + kept.missing.length + kept.blocked.length;
   if (!rules) return;
   if (dryRun) log.dry(`would build ${kept.built.length} kept ${kept.built.length === 1 ? 'copy' : 'copies'}`);

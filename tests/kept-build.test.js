@@ -170,3 +170,19 @@ test('the build record holds each kept copy as that build made it: its first bui
   assert.ok(second.lock.changes.changed.includes(NAME), 'this build says the kept copy changed');
   assert.equal(lockOf().digest, digestSkill(f.copy).digest, 'the record matches the regenerated copy');
 });
+
+test('a previous kept folder that cannot be removed after the swap does not fail the build; it is reported as left over', (t) => {
+  const f = keptFixture(t);
+  f.build();
+  const rmSync = fs.rmSync;
+  t.mock.method(fs, 'rmSync', (p, o) => { if (/kept\.old-\d+$/.test(String(p))) throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }); return rmSync(p, o); });
+  fs.writeFileSync(path.join(f.original, 'notes.txt'), 'changed\n');
+  const result = f.build();
+  t.mock.restoreAll();
+  const old = `${f.paths.keptDir}.old-${process.pid}`;
+  assert.equal(result.kept.leftover, old);
+  assert.deepEqual(result.kept.built, [NAME]);
+  assert.equal(fs.readFileSync(path.join(f.copy, 'notes.txt'), 'utf8'), 'changed\n', 'the new copies are live');
+  assert.ok(fs.existsSync(path.join(f.paths.agentforgeDir, 'lock.json')), 'the build was recorded');
+  fs.rmSync(old, { recursive: true, force: true });
+});

@@ -66,7 +66,8 @@ function copyOriginal({ name, originalPath: from, description }, to, droppedLink
  * Regenerate every kept copy as a real folder under `keptDir`, from the originals as they are now.
  * Built in kept.staging-<pid> and swapped in whole; the previous folder is restored if the swap fails.
  * Refuses (KEPT_SHAPE) rather than touch anything agentforge did not make.
- * Returns { built: names, droppedLinks: [{ name, path }] }.
+ * Returns { built: names, droppedLinks: [{ name, path }], leftover? }: `leftover` is the previous folder when it could
+ * not be removed after a successful swap. The new copies are live by then, so that never fails the build.
  */
 function materializeKept(keptDir, kept) {
   const parent = path.dirname(keptDir);
@@ -114,7 +115,10 @@ function materializeKept(keptDir, kept) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw err;
   }
-  if (current.kind === 'directory') fs.rmSync(old, { recursive: true, force: true });
+  if (current.kind === 'directory') {
+    try { fs.rmSync(old, { recursive: true, force: true }); }
+    catch { return { built, droppedLinks, leftover: old }; }
+  }
   return { built, droppedLinks };
 }
 

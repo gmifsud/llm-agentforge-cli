@@ -455,7 +455,9 @@ class WriteService {
     return { title: 'Rebuild the library', lines, conflicts, ok: conflicts.length === 0, args: {},
       run: () => {
         const res = syncView({ paths: this.paths, env: this.env, cliVault: this.vault, fetch: false, git: this.git });
-        return { lines: [{ tone: 'add', text: `Library rebuilt with ${plural(res.linked, 'skill')}` }] };
+        const out = [{ tone: 'add', text: `Library rebuilt with ${plural(res.linked, 'skill')}` }];
+        if (res.kept.leftover) out.push({ tone: 'warn', text: `The previous kept copies at ${res.kept.leftover} could not be removed. Delete that folder before the next rebuild.` });
+        return { lines: out };
       } };
   }
 
