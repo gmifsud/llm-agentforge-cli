@@ -53,13 +53,13 @@ function parseFrontmatter(text) {
  * body). The description is written as a folded block scalar so any
  * single-line text round-trips through parseFrontmatter. Missing keys are
  * appended before the closing `---`; a missing block is prepended. Inserted
- * lines use the file's first newline style; replaced lines keep their own.
+ * lines use CRLF if the text contains one, else LF; replaced lines keep their own.
  */
 function rewriteFrontmatter(text, { name, description }) {
   if (/[\r\n]/.test(description)) throw failure('KEPT_DESCRIPTION', 'A kept skill description must be a single line.');
   const bom = text.startsWith('﻿') ? '﻿' : '';
   const src = text.slice(bom.length);
-  const nl = /\r?\n/.exec(src)?.[0] ?? '\n';
+  const nl = src.includes('\r\n') ? '\r\n' : '\n';
   const parts = src.split(/(\r?\n)/);
   const lines = [];
   for (let i = 0; i < parts.length; i += 2) lines.push({ t: parts[i], e: parts[i + 1] ?? '' });

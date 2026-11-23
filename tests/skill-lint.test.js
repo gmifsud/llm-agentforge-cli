@@ -115,3 +115,7 @@ test('rewriteFrontmatter keeps blank lines that followed a replaced description'
     '---\nname: a\ndescription: >-\n  d\n\nlicense: MIT\n---\nb\n',
   );
 });
+test('rewriteFrontmatter uses CRLF for inserted lines when any CRLF is present, even after an LF first line', () => {
+  const src = '---\nname: a\r\nlicense: MIT\n---\r\nbody\r\n';
+  assert.equal(rewriteFrontmatter(src, { name: 'a', description: 'd' }), '---\nname: a\r\nlicense: MIT\ndescription: >-\r\n  d\r\n---\r\nbody\r\n');
+});
