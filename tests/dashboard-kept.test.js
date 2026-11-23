@@ -231,3 +231,18 @@ test('detaching the main copy\'s source names the kept copy that leaves, and not
   assert.doesNotMatch(leaving, /frontend-design(?![-\w])/, 'the copy in the vault takes the plain name, so it does not leave');
   assert.match(leaving, /browser-testing/, 'a skill only that source has still leaves');
 });
+
+test('a description is saved as agents will read it: runs of spaces and tabs become one space; a line break is still refused', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  const p = svc.preview(keep({ keep: [{ ...KEEP.keep[0], description: ' Use  when\tyou   want the lab. ' }] }));
+  assert.equal(p.ok, true, JSON.stringify(p.conflicts));
+  assert.equal(p.args.keep[0].description, 'Use when you want the lab.');
+  apply(svc, { kind: 'library.keep', args: p.args });
+  assert.equal(readConfig(f).kept[0].description, 'Use when you want the lab.');
+  const [r] = apply(svc, { kind: 'library.rekeep', args: { name: 'frontend-design-lab', description: 'a  b' } });
+  assert.equal(r.status, 'applied', r.message);
+  assert.equal(readConfig(f).kept[0].description, 'a b');
+  assert.equal(svc.preview(keep({ keep: [{ ...KEEP.keep[0], description: 'one\ntwo' }] })).ok, false);
+  assert.equal(svc.preview({ kind: 'library.rekeep', args: { name: 'frontend-design-lab', description: 'one\ntwo' } }).ok, false);
+});

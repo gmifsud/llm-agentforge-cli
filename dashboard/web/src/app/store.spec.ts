@@ -389,6 +389,16 @@ describe('client state', () => {
       expect(approve.disabled).toBe(false);
     });
 
+    it('keep and rekeep queue each description as agents will read it, spaces and tabs folded to one space', async () => {
+      store.catalog.set(keepCatalog());
+      store.keep('brainstorming', store.vault()!, [{ source: store.sourceById('a')!, name: 'brainstorming-gate', description: ' a  b\tc ' }]);
+      store.rekeep('brainstorming-gate', 'd   e');
+      const args = store.tray().map(i => i.change.args);
+      expect((args[0]!['keep'] as { description: string }[])[0].description).toBe('a b c');
+      expect(args.find(a => a?.['name'] === 'brainstorming-gate')!['description']).toBe('d e');
+      http.match('/api/v1/changes/preview');
+    });
+
     it('descriptionProblem refuses empty, multi-line and over-long text', () => {
       expect(store.descriptionProblem('  ')).toMatch(/must not be empty/);
       expect(store.descriptionProblem('a\nb')).toMatch(/no line breaks/);

@@ -12,7 +12,7 @@ const { createPaths, loadConfig, loadRegistry, resolvePrimarySource } = require(
 const { validateSourceId, deriveSourceId, isGitUrl } = require('../../src/domain/source-id');
 const { TARGETS } = require('../../src/domain/targets');
 const { AgentforgeError, refused } = require('../../src/domain/errors');
-const { checkKeptName, checkDescription, distinctOthers, validateKept } = require('../../src/domain/kept');
+const { checkKeptName, checkDescription, normaliseDescription, distinctOthers, validateKept } = require('../../src/domain/kept');
 const { inspectLibrary } = require('../../src/application/health');
 const { addSource, removeSource, fetchSources, cacheRootFor, sourceRootFor } = require('../../src/application/sources');
 const { syncView } = require('../../src/application/sync');
@@ -244,7 +244,7 @@ class WriteService {
     const text = (v, max) => (typeof v === 'string' && v.length <= max && !v.includes('\0') ? v.trim() : '');
     const entries = args.keep.map(k => {
       if (!k || typeof k !== 'object') throw bad('Each kept copy needs a source, a name and a description.');
-      return { source: str(k.source, 'Source', { max: 64 }), name: text(k.name, 200), description: text(k.description, 5000) };
+      return { source: str(k.source, 'Source', { max: 64 }), name: text(k.name, 200), description: normaliseDescription(text(k.description, 5000)) };
     });
     const config = this.config();
     const isThis = r => nameKey(r.from.skill) === nameKey(skill);
@@ -362,7 +362,7 @@ class WriteService {
   library_rekeep(args) {
     const name = str(args.name, 'Kept copy', { max: 200 });
     const hasDescription = typeof args.description === 'string';
-    const description = hasDescription ? args.description.trim() : null;
+    const description = hasDescription ? normaliseDescription(args.description) : null;
     const config = this.config();
     const rule = (config.kept || []).find(r => nameKey(r.name) === nameKey(name));
     if (!rule) throw new ReadError(ERROR.NOT_FOUND, `No kept copy called "${name}".`, 404);

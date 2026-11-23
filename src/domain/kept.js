@@ -24,6 +24,12 @@ function checkKeptName(name, plain, taken) {
   return null;
 }
 
+/**
+ * A description as agents will read it back: the folded block it is saved in turns every run of whitespace into one
+ * space. Line breaks are left in place, so checkDescription still refuses them rather than joining paragraphs.
+ */
+const normaliseDescription = (description) => description.replace(/[^\S\r\n]+/g, ' ').trim();
+
 function checkDescription(description) {
   if (!isString(description) || description.trim() === '') return 'must not be empty';
   if (/[\r\n]/.test(description)) return 'must be a single paragraph with no line breaks';
@@ -76,4 +82,4 @@ function distinctOthers(candidates, order) {
   return out;
 }
 
-module.exports = { validateKept, checkKeptName, checkDescription, distinctOthers, nameKey };
+module.exports = { validateKept, checkKeptName, checkDescription, normaliseDescription, distinctOthers, nameKey };

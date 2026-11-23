@@ -26,6 +26,8 @@ export interface QueueRow { collision: Collision; main: Skill; others: { skill: 
 const KEPT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const KEPT_NAME_MAX = 64;
 const KEPT_DESCRIPTION_MAX = 900;
+/** A description as agents read it back from its folded block: runs of spaces and tabs are one space. Line breaks stay, to be refused. */
+const foldDescription = (description: string) => description.replace(/[^\S\r\n]+/g, ' ').trim();
 /** The server runs two suggestions at a time; asking for more only earns a BUSY reply. */
 const SUGGEST_CONCURRENCY = 2;
 const SUGGEST_BUSY_RETRY_MS = 2000;
@@ -497,11 +499,11 @@ export class Store {
   }
   /** Keep the differing copies under names of their own (`keep`), with `main` holding the plain name. */
   keep(skill: string, main: Source, keep: { source: Source; name: string; description: string }[]) {
-    this.queue({ kind: 'library.keep', args: { skill, main: main.key, keep: keep.map(k => ({ source: k.source.key, name: k.name, description: k.description })) } }, { kind: 'library.rebuild' });
+    this.queue({ kind: 'library.keep', args: { skill, main: main.key, keep: keep.map(k => ({ source: k.source.key, name: k.name, description: foldDescription(k.description) })) } }, { kind: 'library.rebuild' });
   }
   /** Accept that a kept copy's original changed: follow it as it is now, with a new description when one is given. */
   rekeep(name: string, description?: string) {
-    this.queue({ kind: 'library.rekeep', args: description === undefined ? { name } : { name, description } }, { kind: 'library.rebuild' });
+    this.queue({ kind: 'library.rekeep', args: description === undefined ? { name } : { name, description: foldDescription(description) } }, { kind: 'library.rebuild' });
   }
   /** Stop keeping a copy under its own name. */
   unkeep(name: string) { this.queue({ kind: 'library.unkeep', args: { name } }, { kind: 'library.rebuild' }); }
