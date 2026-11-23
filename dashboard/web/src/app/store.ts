@@ -20,6 +20,13 @@ const STAGE: Record<ChangeKind, number> = {
 /** Steps that stand alone, as on the server: a fetch or a check that cannot be made does not cancel the others. */
 const INDEPENDENT = new Set<ChangeKind>(['source.fetch', 'project.verify']);
 
+/** One clash to settle: the copy that keeps the name, and a name for each distinct other copy (`also`: copies identical to it). */
+export interface QueueRow { collision: Collision; main: Skill; others: { skill: Skill; also: Skill[] }[]; planned: boolean }
+
+const KEPT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const KEPT_NAME_MAX = 64;
+const KEPT_DESCRIPTION_MAX = 900;
+
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
 export interface RunStep { item: TrayItem; startedAt: number | null; result: ChangeResult | null }
@@ -96,13 +103,15 @@ export class Store {
   // ─── same-name skills ──────────────────────────────────────────────────────
   /** Clashes a person should look at: a copy changed since they chose, or only the built-in order decided. Changed first. */
   readonly attention = computed(() => {
-    const all = this.catalog()?.collisions || [];
+    const all = (this.catalog()?.collisions || []).filter(c => !c.resolved);
     return [...all.filter(c => c.kind === 'changed'), ...all.filter(c => c.kind === 'default')];
   });
   readonly clashCounts = computed(() => {
     const all = this.catalog()?.collisions || [];
-    const n = (k: string[]) => all.filter(c => k.includes(c.kind)).length;
-    return { identical: n(['identical']), decided: n(['choice', 'order']), needs: n(['default']), changed: n(['changed']), total: all.length };
+    // A clash whose differing copies are all kept is decided, whatever chose its main copy.
+    const open = all.filter(c => !c.resolved || c.kind === 'identical');
+    const n = (k: string[]) => open.filter(c => k.includes(c.kind)).length;
+    return { identical: n(['identical']), decided: all.filter(c => c.kind !== 'identical' && (c.resolved || ['choice', 'order'].includes(c.kind))).length, needs: n(['default']), changed: n(['changed']), total: all.length };
   });
   clashByName(name: string) { return this.catalog()?.collisions.find(c => c.name === name) || null; }
   /** Why a skill is or is not what your agents get. */
@@ -116,6 +125,52 @@ export class Store {
   }
   findingsFor(skillId: string) { return (this.catalog()?.health?.findings || []).filter(f => f.skillId === skillId); }
   shadowsFor(skillId: string) { return (this.catalog()?.health?.shadows || []).filter(s => s.skillId === skillId); }
+
+  // ─── the name clashes queue ────────────────────────────────────────────────
+  /** Clashes with something to decide, unresolved first. Copies identical to each other need nothing. */
+  readonly queueRows = computed<QueueRow[]>(() => {
+    const c = this.catalog(); if (!c) return [];
+    const rows = c.collisions.filter(col => col.kind !== 'identical').flatMap(collision => {
+      const main = this.skillById(collision.winnerId);
+      return main ? [{ collision, main, others: this.othersFor(collision, main), planned: this.keepPlanned(collision.name) }] : [];
+    });
+    return [...rows.filter(r => !r.collision.resolved), ...rows.filter(r => r.collision.resolved)];
+  });
+  /** Copies that differ from `main`, one entry per distinct content, naming the holder highest in the source order. */
+  othersFor(collision: Collision, main: Skill): { skill: Skill; also: Skill[] }[] {
+    const c = this.catalog(); if (!c) return [];
+    const rank = (s: Skill) => { const i = c.sourceOrder.indexOf(s.sourceId); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+    const candidates = collision.candidateIds.map(id => this.skillById(id)).filter((x): x is Skill => !!x && x.id !== main.id)
+      .filter(x => x.digest == null || x.digest !== main.digest).sort((a, b) => rank(a) - rank(b));
+    const out: { skill: Skill; also: Skill[] }[] = [];
+    const byDigest = new Map<string, { skill: Skill; also: Skill[] }>();
+    for (const skill of candidates) {
+      const held = skill.digest ? byDigest.get(skill.digest) : undefined;
+      if (held) { held.also.push(skill); continue; }
+      const entry = { skill, also: [] as Skill[] };
+      out.push(entry);
+      if (skill.digest) byDigest.set(skill.digest, entry);
+    }
+    return out;
+  }
+  keepPlanned(name: string) { return this.pendingFor('library.keep', a => a['skill'] === name).length > 0; }
+  /** Why `name` cannot be a kept copy of `plain`, or null. Mirrors the server's check; names compare in lower case here. */
+  nameProblem(plain: string, name: string): string | null {
+    if (!KEPT_NAME_PATTERN.test(name)) return 'use lower-case letters, digits and single hyphens only';
+    if (name.length > KEPT_NAME_MAX) return `at most ${KEPT_NAME_MAX} characters`;
+    if (!name.startsWith(`${plain}-`)) return `must start with "${plain}-"`;
+    const taken = new Set<string>((this.catalog()?.skills || []).map(s => s.name.toLowerCase()));
+    for (const item of this.pendingFor('library.keep', () => true)) {
+      for (const k of (item.change.args?.['keep'] as { name: string }[] | undefined) || []) taken.add(k.name.toLowerCase());
+    }
+    return taken.has(name.toLowerCase()) ? 'that name is already in use' : null;
+  }
+  descriptionProblem(description: string): string | null {
+    if (description.trim() === '') return 'must not be empty';
+    if (/[\r\n]/.test(description)) return 'must be a single paragraph with no line breaks';
+    if (description.length > KEPT_DESCRIPTION_MAX) return `at most ${KEPT_DESCRIPTION_MAX} characters`;
+    return null;
+  }
 
   // ─── source order ──────────────────────────────────────────────────────────
   /** Sources highest priority first; a queued reorder is shown as if already applied, so the list answers "what will it be". */
@@ -253,7 +308,9 @@ export class Store {
         const uid = item.uid;
         try {
           const preview = await this.post<ChangePreview>('/changes/preview', { change: item.change });
-          this.tray.update(list => list.map(i => i.uid === uid ? { ...i, preview } : i));
+          // The digests the server saw go with the change, so Apply sends what the person was shown.
+          const digests = item.change.kind === 'library.keep' ? preview.args?.['digests'] : undefined;
+          this.tray.update(list => list.map(i => i.uid === uid ? { ...i, preview, ...(digests ? { change: { ...i.change, args: { ...i.change.args, digests } } } : {}) } : i));
         } catch (e) {
           // An item removed while it was being checked is no longer in the list, so these updates are no-ops.
           this.tray.update(list => list.map(i => i.uid === uid ? { ...i, error: message(e) } : i));
@@ -331,6 +388,12 @@ export class Store {
   prefer(skill: string, source: Source | null) {
     this.queue({ kind: 'library.prefer', args: source && source.kind !== 'primary' ? { skill, source: source.key } : source ? { skill, source: 'vault' } : { skill } }, { kind: 'library.rebuild' });
   }
+  /** Keep the differing copies under names of their own (`keep`), with `main` holding the plain name. */
+  keep(skill: string, main: Source, keep: { source: Source; name: string; description: string }[]) {
+    this.queue({ kind: 'library.keep', args: { skill, main: main.key, keep: keep.map(k => ({ source: k.source.key, name: k.name, description: k.description })) } }, { kind: 'library.rebuild' });
+  }
+  /** Stop keeping a copy under its own name. */
+  unkeep(name: string) { this.queue({ kind: 'library.unkeep', args: { name } }, { kind: 'library.rebuild' }); }
   addProject(path: string) { this.queue({ kind: 'project.add', args: { path } }); }
   forgetProject(projectId: string) { this.queue({ kind: 'project.forget', args: { projectId } }); }
   wire(projectId: string, targets: string[], opts: { writeDocs?: boolean; link?: string; repoint?: boolean } = {}) {

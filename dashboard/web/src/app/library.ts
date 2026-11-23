@@ -4,10 +4,11 @@ import { RouterLink } from '@angular/router';
 import { Store, type Shadow, type SkillView } from './store';
 import { differenceText } from './skill-actions';
 import { SetAsideList } from './set-aside-list';
+import { ClashQueue } from './clash-queue';
 
 const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
 
-@Component({ selector: 'af-library', imports: [DatePipe, RouterLink, SetAsideList], template: `
+@Component({ selector: 'af-library', imports: [DatePipe, RouterLink, SetAsideList, ClashQueue], template: `
   <header class="page-head">
     <h1>Skill library</h1>
     <p>Every skill found in your vault and attached repositories, and why each one is or is not what your agents get.</p>
@@ -36,6 +37,7 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
 
     <div class="split" [class.detail-open]="detail()">
       <section class="list" aria-label="Skills">
+        @if (s.view() === 'collisions') { <af-clash-queue /> } @else {
         <p class="count" role="status">{{ s.filteredSkills().length }} {{ s.filteredSkills().length === 1 ? 'skill' : 'skills' }}</p>
         <table>
           <thead><tr><th scope="col">Skill</th><th scope="col">Source</th><th scope="col">What your agents get</th></tr></thead>
@@ -57,6 +59,7 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
             <span>Page {{ s.page() + 1 }} of {{ s.pages() }}</span>
             <button type="button" class="quiet" (click)="s.page.set(s.page() + 1)" [disabled]="s.page() + 1 >= s.pages()">Next</button>
           </nav>
+        }
         }
         @if (c.rejected.length) {
           <details class="skipped"><summary>{{ c.rejected.length }} {{ c.rejected.length === 1 ? 'folder was' : 'folders were' }} skipped while looking for skills</summary>

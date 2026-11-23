@@ -4,6 +4,7 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { provideRouter } from '@angular/router';
 import { Store, type Catalog } from './store';
 import { Library } from './library';
+import { ClashRow } from './clash-queue';
 import { CHANGES_PREFERENCE_KEY } from './changes-presentation';
 
 const library = { path: 'lib', built: true, builtAt: '', invalid: false, size: 1, add: [], remove: [], change: [], inSync: true };
@@ -295,5 +296,112 @@ describe('client state', () => {
     await first; await second;
     expect(store.comparison()?.identical).toBe(false);
     expect(store.compareBusy()).toBe(false);
+  });
+
+  describe('name clashes queue', () => {
+    const brain = (over: Partial<Catalog['collisions'][number]> = {}) => ({ name: 'brainstorming', winnerId: 'b-v', candidateIds: ['b-v', 'b-a', 'b-b', 'b-c'], preferredSourceId: null, kind: 'default' as const, by: 'default' as const, stale: false, changedSourceIds: [], identicalIds: ['b-c'], resolved: false, keptNames: [], ...over });
+    const keepCatalog = (over: Partial<Catalog['collisions'][number]> = {}): Catalog => {
+      const base = clashCatalog();
+      return {
+        ...base,
+        sources: [...base.sources, src('c', 'gamma')],
+        sourceOrder: ['v', 'a', 'b', 'c'],
+        skills: [...base.skills,
+          { id: 'b-v', sourceId: 'v', name: 'brainstorming', relativePath: 'b', digest: 'd1' }, { id: 'b-a', sourceId: 'a', name: 'brainstorming', relativePath: 'b', digest: 'd2' },
+          { id: 'b-b', sourceId: 'b', name: 'brainstorming', relativePath: 'b', digest: 'd2' }, { id: 'b-c', sourceId: 'c', name: 'brainstorming', relativePath: 'b', digest: 'd1' }],
+        collisions: [...base.collisions.map(c => c.name === 'x' ? { ...c, resolved: true, kind: 'choice' as const } : c), brain(over)],
+      };
+    };
+
+    it('queueRows leaves out identical clashes and puts unresolved before resolved', () => {
+      store.catalog.set(keepCatalog());
+      expect(store.queueRows().map(r => r.collision.name)).toEqual(['tdd', 'brainstorming', 'x']);
+      expect(store.queueRows().map(r => r.planned)).toEqual([false, false, false]);
+    });
+
+    it('groups copies that differ from the main by content, naming the highest-ranked holder', () => {
+      store.catalog.set(keepCatalog());
+      const row = store.queueRows().find(r => r.collision.name === 'brainstorming')!;
+      expect(row.main.id).toBe('b-v');
+      expect(row.others.map(o => ({ skill: o.skill.id, also: o.also.map(a => a.id) }))).toEqual([{ skill: 'b-a', also: ['b-b'] }]);
+    });
+
+    it('keep queues the keep and then the rebuild, with the source keys as the server expects', () => {
+      store.catalog.set(keepCatalog());
+      const row = store.queueRows().find(r => r.collision.name === 'brainstorming')!;
+      store.keep('brainstorming', store.vault()!, [{ source: store.sourceById('a')!, name: 'brainstorming-gate', description: 'Gate.' }]);
+      expect(store.tray().map(i => i.change)).toEqual([
+        { kind: 'library.keep', args: { skill: 'brainstorming', main: 'vault', keep: [{ source: 'alpha', name: 'brainstorming-gate', description: 'Gate.' }] } },
+        { kind: 'library.rebuild' },
+      ]);
+      expect(store.queueRows().find(r => r.collision === row.collision || r.collision.name === 'brainstorming')!.planned).toBe(true);
+      http.match('/api/v1/changes/preview');
+    });
+
+    it('nameProblem mirrors the server: pattern, prefix, length, and names in use or pending', () => {
+      store.catalog.set(keepCatalog());
+      expect(store.nameProblem('brainstorming', 'Brainstorming-X')).toMatch(/lower-case/);
+      expect(store.nameProblem('brainstorming', 'other-name')).toMatch(/must start with "brainstorming-"/);
+      expect(store.nameProblem('brainstorming', 'brainstorming-' + 'a'.repeat(60))).toMatch(/at most 64/);
+      expect(store.nameProblem('tdd', 'tdd')).toMatch(/must start with|in use/);
+      expect(store.nameProblem('brainstorming', 'brainstorming-gate')).toBeNull();
+      store.keep('brainstorming', store.vault()!, [{ source: store.sourceById('a')!, name: 'brainstorming-gate', description: 'Gate.' }]);
+      expect(store.nameProblem('brainstorming', 'brainstorming-gate')).toMatch(/already in use/);
+      store.tray.set([]);
+      store.catalog.update(c => ({ ...c!, skills: [...c!.skills, { id: 'k', sourceId: 'v', name: 'Brainstorming-Kept', relativePath: 'k' }] }));
+      expect(store.nameProblem('brainstorming', 'brainstorming-kept')).toMatch(/already in use/);
+      http.match('/api/v1/changes/preview');
+    });
+
+    it('descriptionProblem refuses empty, multi-line and over-long text', () => {
+      expect(store.descriptionProblem('  ')).toMatch(/must not be empty/);
+      expect(store.descriptionProblem('a\nb')).toMatch(/no line breaks/);
+      expect(store.descriptionProblem('a'.repeat(901))).toMatch(/at most 900/);
+      expect(store.descriptionProblem('fine')).toBeNull();
+    });
+
+    it('clashCounts counts a resolved clash as decided even when only the default order chose', () => {
+      store.catalog.set(keepCatalog({ resolved: true, keptNames: ['brainstorming-gate'] }));
+      expect(store.clashCounts()).toEqual({ identical: 1, decided: 2, needs: 0, changed: 1, total: 4 });
+    });
+
+    it('a clash row keeps Approve disabled until the name and description are valid, then queues the keep', async () => {
+      store.catalog.set(keepCatalog());
+      const row = store.queueRows().find(r => r.collision.name === 'brainstorming')!;
+      const fixture = TestBed.createComponent(ClashRow);
+      fixture.componentRef.setInput('row', row);
+      await fixture.whenStable();
+      const host: HTMLElement = fixture.nativeElement;
+      const approve = () => [...host.querySelectorAll('button')].find(b => b.textContent === 'Approve') as HTMLButtonElement;
+      const type = async (el: HTMLInputElement | HTMLTextAreaElement, value: string) => { el.value = value; el.dispatchEvent(new Event('input')); fixture.detectChanges(); await fixture.whenStable(); };
+      expect(approve().disabled).toBe(true);
+      await type(host.querySelector('#keep-name-b-a') as HTMLInputElement, 'Brainstorming-Gate');
+      expect(host.querySelector('.field-error')?.textContent).toMatch(/lower-case/);
+      await type(host.querySelector('#keep-name-b-a') as HTMLInputElement, 'brainstorming-gate');
+      expect(approve().disabled).toBe(true);
+      await type(host.querySelector('#keep-desc-b-a') as HTMLTextAreaElement, 'Adds a gate.');
+      expect(approve().disabled).toBe(false);
+      approve().click();
+      expect(store.tray()[0].change.args).toEqual({ skill: 'brainstorming', main: 'vault', keep: [{ source: 'alpha', name: 'brainstorming-gate', description: 'Adds a gate.' }] });
+      http.match('/api/v1/changes/preview');
+    });
+
+    it('copies the previewed digests into the queued keep, so Apply sends what the person saw', async () => {
+      store.catalog.set(keepCatalog());
+      store.keep('brainstorming', store.vault()!, [{ source: store.sourceById('a')!, name: 'brainstorming-gate', description: 'Gate.' }]);
+      const keepArgs = { skill: 'brainstorming', main: 'vault', keep: [{ source: 'alpha', name: 'brainstorming-gate', description: 'Gate.' }] };
+      http.expectOne('/api/v1/changes/preview').flush({ kind: 'library.keep', title: 'Keep', lines: [], conflicts: [], ok: true, args: { ...keepArgs, digests: { vault: 'd1', alpha: 'd2' } } });
+      await settle();
+      expect(store.tray()[0].change.args).toEqual({ ...keepArgs, digests: { vault: 'd1', alpha: 'd2' } });
+      http.expectOne('/api/v1/changes/preview').flush(ok('Rebuild'));
+      await settle();
+      const apply = store.apply();
+      const req = http.expectOne('/api/v1/changes/apply');
+      expect(req.request.body.changes[0].args.digests).toEqual({ vault: 'd1', alpha: 'd2' });
+      req.flush({ results: [result('library.keep', 'Keep', 'applied')] });
+      await settle();
+      http.expectOne('/api/v1/changes/apply').flush({ results: [result('library.rebuild', 'Rebuild', 'applied')] });
+      await refreshAfter(apply);
+    });
   });
 });
