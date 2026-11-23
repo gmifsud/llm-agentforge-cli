@@ -183,8 +183,11 @@ export class Store {
     return out;
   }
   keepPlanned(name: string) { return this.pendingFor('library.keep', a => a['skill'] === name).length > 0; }
-  /** Why `name` cannot be a kept copy of `plain`, or null. Mirrors the server's check; names compare in lower case here. */
-  nameProblem(plain: string, name: string): string | null {
+  /**
+   * Why `name` cannot be a kept copy of `plain`, or null. Mirrors the server's check; names compare in lower case here.
+   * `own` are the clash's kept names now: saving the clash again may reuse them, as the server allows.
+   */
+  nameProblem(plain: string, name: string, own: readonly string[] = []): string | null {
     if (!KEPT_NAME_PATTERN.test(name)) return 'use lower-case letters, digits and single hyphens only';
     if (name.length > KEPT_NAME_MAX) return `at most ${KEPT_NAME_MAX} characters`;
     if (!name.startsWith(`${plain}-`)) return `must start with "${plain}-"`;
@@ -192,7 +195,12 @@ export class Store {
     for (const item of this.pendingFor('library.keep', () => true)) {
       for (const k of (item.change.args?.['keep'] as { name: string }[] | undefined) || []) taken.add(k.name.toLowerCase());
     }
+    for (const k of own) taken.delete(k.toLowerCase());
     return taken.has(name.toLowerCase()) ? 'that name is already in use' : null;
+  }
+  /** The kept copy made from `clash`'s copy in `sourceId`, if there is one. */
+  keptFor(clash: string, sourceId: string): Skill | null {
+    return (this.catalog()?.skills || []).find(s => !!s.kept && s.kept.fromSkill.toLowerCase() === clash.toLowerCase() && s.kept.fromSourceId === sourceId) || null;
   }
   descriptionProblem(description: string): string | null {
     if (description.trim() === '') return 'must not be empty';

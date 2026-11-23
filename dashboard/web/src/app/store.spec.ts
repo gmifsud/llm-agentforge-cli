@@ -354,6 +354,34 @@ describe('client state', () => {
       http.match('/api/v1/changes/preview');
     });
 
+    /** brainstorming with alpha's copy already kept as brainstorming-gate, and a new copy that the rule does not cover. */
+    const keptAgain = (): Catalog => {
+      const c = keepCatalog({ keptNames: ['brainstorming-gate'] });
+      return { ...c, skills: [...c.skills,
+        { id: 'kept-gate', sourceId: 'a', name: 'brainstorming-gate', relativePath: 'b', kept: { fromSkill: 'brainstorming', fromSourceId: 'a', stale: false, built: true, description: 'The gated copy.' } }] };
+    };
+
+    it('nameProblem lets a clash keep its own kept names, and no other clash', () => {
+      store.catalog.set(keptAgain());
+      expect(store.nameProblem('brainstorming', 'brainstorming-gate', ['brainstorming-gate'])).toBeNull();
+      expect(store.nameProblem('brainstorming', 'brainstorming-gate', ['Brainstorming-Gate'])).toBeNull();
+      expect(store.nameProblem('brainstorming', 'brainstorming-gate')).toMatch(/already in use/);
+    });
+
+    it('a row for a clash that already has kept copies opens with their names and descriptions, ready to approve', async () => {
+      store.catalog.set(keptAgain());
+      const row = store.queueRows().find(r => r.collision.name === 'brainstorming')!;
+      const fixture = TestBed.createComponent(ClashRow);
+      fixture.componentRef.setInput('row', row);
+      await fixture.whenStable();
+      const host: HTMLElement = fixture.nativeElement;
+      expect((host.querySelector('#keep-name-b-a') as HTMLInputElement).value).toBe('brainstorming-gate');
+      expect((host.querySelector('#keep-desc-b-a') as HTMLTextAreaElement).value).toBe('The gated copy.');
+      expect(host.querySelector('.field-error')).toBeNull();
+      const approve = [...host.querySelectorAll('button')].find(b => b.textContent === 'Approve') as HTMLButtonElement;
+      expect(approve.disabled).toBe(false);
+    });
+
     it('descriptionProblem refuses empty, multi-line and over-long text', () => {
       expect(store.descriptionProblem('  ')).toMatch(/must not be empty/);
       expect(store.descriptionProblem('a\nb')).toMatch(/no line breaks/);

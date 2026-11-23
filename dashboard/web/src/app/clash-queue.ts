@@ -77,6 +77,19 @@ export class ClashRow {
   private descriptionEdited = signal<Record<string, boolean>>({});
 
   constructor() {
+    // A clash saved before opens with what it was saved as: each copy already kept shows its kept name and description.
+    effect(() => {
+      const entries = this.entries();
+      untracked(() => {
+        for (const o of entries) {
+          if (this.names()[o.skill.id] !== undefined || this.descriptions()[o.skill.id] !== undefined) continue;
+          const kept = [o.skill, ...o.also].map(x => this.s.keptFor(this.row().collision.name, x.sourceId)).find(k => !!k);
+          if (!kept?.kept) continue;
+          this.names.update(m => ({ ...m, [o.skill.id]: kept.name }));
+          this.descriptions.update(m => ({ ...m, [o.skill.id]: kept.kept!.description }));
+        }
+      });
+    });
     // Fill what the person has not typed from the suggestions for this clash, whenever they arrive or the copies change.
     effect(() => {
       const suggestions = this.s.suggestions().get(this.row().collision.name);
@@ -112,7 +125,7 @@ export class ClashRow {
     if (!typed) return '';
     const plain = this.row().collision.name;
     const clash = this.entries().some(o => o.skill.id !== skill.id && this.name(o.skill).toLowerCase() === typed.toLowerCase());
-    return this.s.nameProblem(plain, typed) || (clash ? 'another copy in this clash uses that name' : '') || '';
+    return this.s.nameProblem(plain, typed, this.row().collision.keptNames) || (clash ? 'another copy in this clash uses that name' : '') || '';
   }
   descriptionError(skill: Skill): string { return this.description(skill) ? this.s.descriptionProblem(this.description(skill)) || '' : ''; }
   ready = computed(() => this.entries().length > 0 && this.entries().every(o =>

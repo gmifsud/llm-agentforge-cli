@@ -285,7 +285,7 @@ class ReadService {
         let built = false;
         try { built = fs.lstatSync(row.absolutePath).isDirectory(); } catch { /* not built yet */ }
         const skill = { id: idFor('kept', row.name), name: row.name, sourceId: original.sourceId, relativePath: original.relativePath,
-          kept: { fromSkill: row.from.skill, fromSourceId: originalSource.id, stale: row.stale, built } };
+          kept: { fromSkill: row.from.skill, fromSourceId: originalSource.id, stale: row.stale, built, description: row.description } };
         skills.push(skill);
         documents.set(skill.id, built
           ? { ...skill, root: this.paths.keptDir, directory: row.absolutePath, physicalRoot: localPath(this.paths.keptDir) }

@@ -160,7 +160,7 @@ test('a kept copy is a skill in the catalogue, built or not, and resolves its cl
   let c = read().refresh();
   const lab = c.sources.find(s => s.key === 'frontend-lab');
   assert.equal(keptSkill(c).sourceId, lab.id);
-  assert.deepEqual(keptSkill(c).kept, { fromSkill: 'frontend-design', fromSourceId: lab.id, stale: false, built: false });
+  assert.deepEqual(keptSkill(c).kept, { fromSkill: 'frontend-design', fromSourceId: lab.id, stale: false, built: false, description: 'The lab copy.' });
   assert.ok(c.winnerIds.includes(keptSkill(c).id));
   const unbuilt = read(), uc = unbuilt.refresh();
   assert.match(unbuilt.document(keptSkill(uc).id, uc.generation).text, /^name: frontend-design$/m, 'before a rebuild it reads the original');

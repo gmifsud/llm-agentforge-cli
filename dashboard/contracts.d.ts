@@ -14,8 +14,8 @@ export interface Skill {
   id: string; name: string; sourceId: string; relativePath: string; digest?: string | null;
   /** For skills in the library: the skill's own category, and the length of its description. What a set is built from. */
   category?: string; descriptionChars?: number;
-  /** Set on a kept copy: the skill it was kept from, and whether its own folder has been built yet. */
-  kept?: { fromSkill: string; fromSourceId: string; stale: boolean; built: boolean };
+  /** Set on a kept copy: the skill it was kept from, its rule's description, and whether its own folder has been built yet. */
+  kept?: { fromSkill: string; fromSourceId: string; stale: boolean; built: boolean; description: string };
 }
 /** One rule of a set: select skills by name, name pattern, source or category; an exclude removes what it selects. */
 export interface SetRule { type: 'skill' | 'name' | 'source' | 'category'; value: string; exclude?: boolean }
