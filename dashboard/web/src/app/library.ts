@@ -51,6 +51,7 @@ const TOOL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', ge
             @for (skill of s.visibleSkills(); track skill.id) {
               <tr [class.selected]="skill.id === s.skillId()">
                 <td><button type="button" class="row-button" [attr.data-skill]="skill.id" (click)="select(skill.id)">{{ skill.name }}</button>
+                  @if (skill.kept; as k) { <span class="tag">kept copy of {{ k.fromSkill }} from {{ s.sourceName(k.fromSourceId) }}</span> }
                   @if (s.findingsFor(skill.id).length || s.shadowsFor(skill.id).length) { <span class="tag runs">has a problem</span> }</td>
                 <td>{{ s.sourceName(skill.sourceId) }}</td>
                 <td [class.muted]="!c.winnerIds.includes(skill.id)">{{ s.reason(skill) }}</td>

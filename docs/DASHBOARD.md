@@ -95,6 +95,16 @@ Every skill found in every source, searchable and filterable by source. Switch b
 
 **Restore.** Everything set aside is listed under the table on the Skills page and on the Library card, with where it is held and where it goes back to. *Restore* queues the move back. It is disabled, with a note, when something is already at the original place. The place it goes back to is worked out from the tool and the name, never read from the record, so an edited record cannot send the folder elsewhere.
 
+### Keeping both copies
+
+When two sources have a skill with the same name, you can keep every different copy instead of choosing one. In *Name clashes*, pick the copy that keeps the plain name, then give each other copy a name that says how it differs, and a short description. **Approve** queues it and **Apply** writes it. Nothing changes before that. *Keep only one* is still there if you would rather choose.
+
+**Claude can suggest the names.** *Suggest names* sends one short question per clash, with the differing copies, to Claude on your account, and asks you to confirm first. A suggestion only fills a field you have not typed in, and each copy says whether its text was suggested by Claude, is a plain fallback, or was typed by you. If Claude cannot be reached, a plain fallback is offered instead. You can edit every name and description, and nothing is kept until you approve and apply.
+
+**Where the copies live.** Each decision is a `kept` rule in `~/.agentforge/config.json`. Applying it rebuilds the library, which writes a full copy of the skill into `~/.agentforge/kept/<name>` with only its name and description rewritten. Your original is never touched. On the Skills page a kept copy carries a *kept copy of ... from ...* tag, and its clash moves to *resolved*. *Stop keeping* removes the rule and its copy.
+
+**Need a look.** A kept copy is flagged when it no longer fits its original: the original changed since you decided (so the description may be out of date), the original is gone, the name is now taken, or the original has become the copy in use. Each row says what happened and offers the fix: follow the original as it is now, rename, or stop keeping it.
+
 ### Adopting a folder of your own skills
 
 A project whose `.claude/skills` (or another agent's) is an ordinary folder that Agentforge did not make reads in Fleet as "Has its own folder (n skills), not managed here". Its panel row has **Adopt**, which opens a box saying what happens before anything is queued:

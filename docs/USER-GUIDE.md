@@ -188,6 +188,8 @@ Two sources, same folder name. The view can hold only one. Default: the vault wi
 2. **Prefer the attached version.** `agentforge repo sync --force`. This flips *every* collision, not just one. Check the dry run first.
 3. **Keep both.** Rename the folder in your vault (you own it) and rebuild.
 
+The dashboard can also keep every different copy under its own name (see *Keeping both copies* in `docs/DASHBOARD.md`). Each one is a rule in the `kept` list of `~/.agentforge/config.json`: the new name, a description, and the skill and source it was made from. `agentforge repo sync` honours these rules: it rebuilds each kept copy into `~/.agentforge/kept/<name>`, and warns about one it cannot build (its original is gone, or its name is taken). The CLI does not add or remove rules; use the dashboard for that.
+
 A collision is reported, never silent. If you see one you did not expect, a source you attached is shipping a skill with the same name as yours; read both `SKILL.md` files before choosing.
 
 ### 6.4 Wire a second tool in the same project
@@ -371,7 +373,8 @@ Agentforge prefers a clear refusal to a guess. The common ones:
 | Path | What | Safe to delete? |
 | :-- | :-- | :-- |
 | `~/.agentforge/repos.json` | Registered sources | No; this is your configuration |
-| `~/.agentforge/config.json` | Optional `vaultRoot` | Yes; falls back to env var or default |
+| `~/.agentforge/config.json` | Optional `vaultRoot`, and the `kept` rules | Yes; falls back to env var or default |
+| `~/.agentforge/kept/<name>/` | A kept copy of a skill whose name clashed, made from its `kept` rule in `config.json` | Yes; the next build writes it again |
 | `~/.agentforge/repos/<id>/` | Git clones | Yes; `repo fetch` recreates them |
 | `~/.agentforge/merged-skills/` | The default view (links only) | Yes; `repo sync --no-fetch` recreates it |
 | `~/.agentforge/lock.json` | What the last build held: for each skill its source, the source's revision and a digest of its content. `update` and `repo sync` compare against it to say what changed since. It is only ever compared with, never trusted over the folders on disk | Yes; the next build writes it again, and until then there is simply nothing to compare with |
