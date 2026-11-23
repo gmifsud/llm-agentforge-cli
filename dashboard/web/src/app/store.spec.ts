@@ -11,7 +11,7 @@ const catalog: Catalog = {
   generation: 'g1', startedAt: '', completedAt: '', status: 'complete', mergeAvailable: true, library, projects: [], health: null, sourceOrder: ['source'], sourceOrderExplicit: false, sinceLastBuild: null, sets: [], setAside: [],
   sources: [{ id: 'source', key: 'vault', kind: 'primary', name: 'Primary vault', location: 'fixture', root: 'fixture', state: 'available', revision: null, count: 1, rejectionCount: 0, error: null }],
   skills: [{ id: 'skill', sourceId: 'source', name: 'test-skill', relativePath: 'test-skill' }],
-  winnerIds: ['skill'], collisions: [], rejected: [], warnings: [],
+  winnerIds: ['skill'], collisions: [], keptIssues: [], rejected: [], warnings: [],
 };
 const ok = (title: string) => ({ kind: 'library.rebuild', title, lines: [], conflicts: [], ok: true });
 
@@ -216,9 +216,9 @@ describe('client state', () => {
     ],
     winnerIds: ['tdd-a', 'x-a', 'same-v'],
     collisions: [
-      { name: 'tdd', winnerId: 'tdd-a', candidateIds: ['tdd-v', 'tdd-a'], preferredSourceId: 'a', kind: 'changed', by: 'choice', stale: true, changedSourceIds: ['v'], identicalIds: [] },
-      { name: 'x', winnerId: 'x-a', candidateIds: ['x-a', 'x-b'], preferredSourceId: null, kind: 'default', by: 'default', stale: false, changedSourceIds: [], identicalIds: [] },
-      { name: 'same', winnerId: 'same-v', candidateIds: ['same-v', 'same-b'], preferredSourceId: null, kind: 'identical', by: 'default', stale: false, changedSourceIds: [], identicalIds: ['same-b'] },
+      { name: 'tdd', winnerId: 'tdd-a', candidateIds: ['tdd-v', 'tdd-a'], preferredSourceId: 'a', kind: 'changed', by: 'choice', stale: true, changedSourceIds: ['v'], identicalIds: [], resolved: false, keptNames: [] },
+      { name: 'x', winnerId: 'x-a', candidateIds: ['x-a', 'x-b'], preferredSourceId: null, kind: 'default', by: 'default', stale: false, changedSourceIds: [], identicalIds: [], resolved: false, keptNames: [] },
+      { name: 'same', winnerId: 'same-v', candidateIds: ['same-v', 'same-b'], preferredSourceId: null, kind: 'identical', by: 'default', stale: false, changedSourceIds: [], identicalIds: ['same-b'], resolved: false, keptNames: [] },
     ],
   });
 

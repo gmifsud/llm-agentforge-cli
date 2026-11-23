@@ -9,7 +9,7 @@ import type { Adoptable, SetAsideItem, Shadow } from '../../../contracts';
 const library = { path: 'lib', built: true, builtAt: '', invalid: false, size: 1, add: [], remove: [], change: [], inSync: true };
 const catalog: Catalog = {
   generation: 'g1', startedAt: '', completedAt: '', status: 'complete', mergeAvailable: true, library, projects: [], health: null, sourceOrder: [], sourceOrderExplicit: false, sinceLastBuild: null, sets: [], setAside: [],
-  sources: [], skills: [], winnerIds: [], collisions: [], rejected: [], warnings: [],
+  sources: [], skills: [], winnerIds: [], collisions: [], keptIssues: [], rejected: [], warnings: [],
 };
 const ok = (kind: string) => ({ kind, title: kind, lines: [], conflicts: [], ok: true });
 
