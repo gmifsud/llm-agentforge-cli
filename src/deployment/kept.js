@@ -42,18 +42,24 @@ function resolvesInside(target, root) {
 
 /** Copy one original, never following links; links leading outside the original are dropped and listed. */
 function copyOriginal({ name, originalPath: from, description }, to, droppedLinks) {
+  // Copy from the real folder, so an original that is itself a link never makes the copy a link into it.
   const root = fs.realpathSync.native(from);
-  fs.cpSync(from, to, {
+  fs.cpSync(root, to, {
     recursive: true,
     dereference: false,
+    verbatimSymlinks: true,
     filter: (src) => {
       if (!fs.lstatSync(src).isSymbolicLink() || resolvesInside(src, root)) return true;
-      droppedLinks.push({ name, path: path.relative(from, src) });
+      droppedLinks.push({ name, path: path.relative(root, src) });
       return false;
     },
   });
+  if (!fs.lstatSync(to).isDirectory()) throw refused('KEPT_SHAPE', `${to} was copied as a link, not a folder; refusing to write through it.`);
   const skillFile = path.join(to, 'SKILL.md');
-  fs.writeFileSync(skillFile, rewriteFrontmatter(fs.readFileSync(skillFile, 'utf8'), { name, description }));
+  const text = fs.readFileSync(skillFile, 'utf8');
+  // A SKILL.md that is a link is replaced by a plain file, so the rewrite can never land in the original.
+  if (fs.lstatSync(skillFile).isSymbolicLink()) fs.unlinkSync(skillFile);
+  fs.writeFileSync(skillFile, rewriteFrontmatter(text, { name, description }));
 }
 
 /**

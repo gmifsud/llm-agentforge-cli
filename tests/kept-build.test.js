@@ -61,6 +61,7 @@ test('a link leading outside the original is not copied and is reported; one tha
   assert.deepEqual(result.kept.droppedLinks, [{ name: NAME, path: 'escape' }]);
   assert.equal(fs.existsSync(path.join(f.copy, 'escape')), false);
   assert.equal(fs.lstatSync(path.join(f.copy, 'inner-alias')).isSymbolicLink(), true);
+  assert.equal(fs.readlinkSync(path.join(f.copy, 'inner-alias')), fs.readlinkSync(path.join(f.original, 'inner-alias')), 'the link text is copied verbatim');
   assert.ok(fs.existsSync(path.join(outside, 'secret.txt')), 'the target of a dropped link is never touched');
 });
 
@@ -127,4 +128,34 @@ test('a bad config refuses before any fetch touches a clone', (t) => {
   const git = { clone: (...a) => calls.push(['clone', ...a]), pull: (...a) => calls.push(['pull', ...a]), revision: () => 'x' };
   assert.throws(() => syncView({ paths: f.paths, env: {}, fetch: true, git }), (e) => e.code === 'CONFIG_INVALID');
   assert.deepEqual(calls, []);
+});
+
+test('an original folder that is itself a link is copied as a real folder and the original is never written', (t) => {
+  const f = keptFixture(t);
+  // Discovery accepts a link to a skill folder only when plugin.json lists it and the target is inside the source.
+  const real = path.join(f.source, '.real', 'frontend-design');
+  fs.mkdirSync(path.dirname(real));
+  fs.renameSync(f.original, real);
+  mkLink(real, f.original);
+  fs.mkdirSync(path.join(f.source, '.claude-plugin'));
+  fs.writeFileSync(path.join(f.source, '.claude-plugin', 'plugin.json'), JSON.stringify({ skills: ['frontend-design'] }));
+  const before = fs.readFileSync(path.join(real, 'SKILL.md'));
+  const result = f.build();
+  assert.deepEqual(result.kept.built, [NAME]);
+  assert.equal(fs.lstatSync(f.copy).isSymbolicLink(), false);
+  assert.match(fs.readFileSync(path.join(f.copy, 'SKILL.md'), 'utf8'), /^name: frontend-design-lab$/m);
+  assert.deepEqual(fs.readFileSync(path.join(real, 'SKILL.md')), before);
+});
+
+test('a SKILL.md that is a link inside the original becomes a plain file in the copy; the original file is untouched', (t) => {
+  const f = keptFixture(t);
+  const target = path.join(f.original, 'SKILL.real.md');
+  fs.renameSync(path.join(f.original, 'SKILL.md'), target);
+  try { fs.symlinkSync('SKILL.real.md', path.join(f.original, 'SKILL.md'), 'file'); }
+  catch (e) { if (e.code === 'EPERM') return t.skip('creating file symlinks needs privileges here'); throw e; }
+  const before = fs.readFileSync(target);
+  f.build();
+  assert.deepEqual(fs.readFileSync(target), before);
+  assert.equal(fs.lstatSync(path.join(f.copy, 'SKILL.md')).isSymbolicLink(), false);
+  assert.match(fs.readFileSync(path.join(f.copy, 'SKILL.md'), 'utf8'), /^name: frontend-design-lab$/m);
 });
