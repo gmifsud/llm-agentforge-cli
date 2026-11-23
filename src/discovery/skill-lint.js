@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { failure } = require('../domain/errors');
 
 /**
  * Rules a SKILL.md must meet to be invocable, and which agent tools each rule
@@ -44,6 +45,44 @@ function parseFrontmatter(text) {
     fields[key] = value;
   }
   return { fields, body: lines.slice(end + 1).join('\n') };
+}
+
+/**
+ * Rewrite only `name:` and `description:` in a SKILL.md frontmatter block,
+ * leaving every other byte alone (BOM, newline style, other keys, body). The
+ * description is written as a folded block scalar so any single-line text
+ * round-trips through parseFrontmatter. Missing keys are appended before the
+ * closing `---`; a missing block is prepended.
+ */
+function rewriteFrontmatter(text, { name, description }) {
+  if (/[\r\n]/.test(description)) throw failure('KEPT_DESCRIPTION', 'A kept skill description must be a single line.');
+  const bom = text.startsWith('﻿') ? '﻿' : '';
+  const src = text.slice(bom.length);
+  const nl = src.includes('\r\n') ? '\r\n' : '\n';
+  const nameLines = [`name: ${name}`];
+  const descLines = ['description: >-', `  ${description}`];
+  const lines = src.split(/\r?\n/);
+  const end = lines[0] === '---' ? lines.indexOf('---', 1) : -1;
+  if (end === -1) return bom + ['---', ...nameLines, ...descLines, '---'].join(nl) + nl + src;
+  const out = [];
+  let hasName = false;
+  let hasDescription = false;
+  for (let i = 1; i < end; i++) {
+    const key = /^([A-Za-z0-9_-]+):/.exec(lines[i]);
+    if (key && key[1] === 'name' && !hasName) {
+      hasName = true;
+      out.push(...nameLines);
+    } else if (key && key[1] === 'description' && !hasDescription) {
+      hasDescription = true;
+      out.push(...descLines);
+      while (i + 1 < end && (/^\s+/.test(lines[i + 1]) || lines[i + 1] === '')) i++;
+    } else {
+      out.push(lines[i]);
+    }
+  }
+  if (!hasName) out.push(...nameLines);
+  if (!hasDescription) out.push(...descLines);
+  return bom + ['---', ...out, '---', ...lines.slice(end + 1)].join(nl);
 }
 
 const finding = (code, severity, tools, message) => ({ code, severity, tools, message });
@@ -121,4 +160,4 @@ function personalLevels(homedir) {
   ];
 }
 
-module.exports = { parseFrontmatter, lintSkill, findShadows, personalLevels, DESCRIPTION_CAP };
+module.exports = { parseFrontmatter, rewriteFrontmatter, lintSkill, findShadows, personalLevels, DESCRIPTION_CAP };

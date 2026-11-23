@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseFrontmatter, lintSkill, findShadows } = require('../src/discovery/skill-lint');
+const { parseFrontmatter, rewriteFrontmatter, lintSkill, findShadows } = require('../src/discovery/skill-lint');
 const { estimateListing } = require('../src/discovery/listing-budget');
 const { tempRoot } = require('./helpers');
 
@@ -77,4 +77,29 @@ test('listing budget: names always fit; counts how many descriptions cannot', ()
   // Budget from a context window: 1% of tokens, about four characters per token.
   assert.equal(estimateListing([], { contextTokens: 200000 }).budgetChars, 8000);
   assert.equal(estimateListing([], { contextTokens: 1000000 }).budgetChars, 40000);
+});
+
+test('rewriteFrontmatter changes only name and description and keeps CRLF and BOM', () => {
+  const src = '﻿---\r\nname: brainstorming\r\ndescription: old\r\nlicense: MIT\r\n---\r\n# Body\r\n';
+  const out = rewriteFrontmatter(src, { name: 'brainstorming-gate', description: 'new one' });
+  assert.equal(out, '﻿---\r\nname: brainstorming-gate\r\ndescription: >-\r\n  new one\r\nlicense: MIT\r\n---\r\n# Body\r\n');
+});
+
+test('rewriteFrontmatter replaces a block-scalar description whole', () => {
+  const src = '---\nname: a\ndescription: |\n  line one\n  line two\nk: v\n---\nbody\n';
+  assert.equal(rewriteFrontmatter(src, { name: 'a-b', description: 'x' }), '---\nname: a-b\ndescription: >-\n  x\nk: v\n---\nbody\n');
+});
+
+test('rewriteFrontmatter round-trips awkward descriptions through parseFrontmatter', () => {
+  const d = 'Use when "quoted" \\ back: slash # hash --- dashes';
+  assert.equal(parseFrontmatter(rewriteFrontmatter('---\nname: a\n---\n', { name: 'a-b', description: d })).fields.description, d);
+});
+
+test('rewriteFrontmatter inserts missing lines and a missing block', () => {
+  assert.equal(rewriteFrontmatter('# Only body\n', { name: 'a-b', description: 'd' }), '---\nname: a-b\ndescription: >-\n  d\n---\n# Only body\n');
+  assert.equal(rewriteFrontmatter('---\nlicense: MIT\n---\nb\n', { name: 'a-b', description: 'd' }), '---\nlicense: MIT\nname: a-b\ndescription: >-\n  d\n---\nb\n');
+});
+
+test('rewriteFrontmatter refuses a description with a line break', () => {
+  assert.throws(() => rewriteFrontmatter('---\nname: a\n---\n', { name: 'a-b', description: 'x\ny' }), { code: 'KEPT_DESCRIPTION' });
 });
