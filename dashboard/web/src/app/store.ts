@@ -13,7 +13,7 @@ function message(error: any): string { return error?.error?.error?.message || 'T
 
 /** Pipeline order: sources change first, then the library, then projects. */
 const STAGE: Record<ChangeKind, number> = {
-  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.order': 0, 'source.fetch': 1,
+  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.keep': 0, 'library.unkeep': 0, 'library.order': 0, 'source.fetch': 1,
   'library.rebuild': 2, 'set.save': 2, 'set.remove': 3, 'project.add': 3, 'project.forget': 3, 'skill.setaside': 3, 'skill.restore': 3, 'project.wire': 4, 'project.adopt': 4, 'project.verify': 5,
 };
 

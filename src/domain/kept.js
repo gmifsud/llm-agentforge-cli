@@ -75,4 +75,4 @@ function distinctOthers(candidates, order) {
   return out;
 }
 
-module.exports = { validateKept, checkKeptName, distinctOthers, nameKey };
+module.exports = { validateKept, checkKeptName, checkDescription, distinctOthers, nameKey };
