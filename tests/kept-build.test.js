@@ -159,3 +159,14 @@ test('a SKILL.md that is a link inside the original becomes a plain file in the 
   assert.equal(fs.lstatSync(path.join(f.copy, 'SKILL.md')).isSymbolicLink(), false);
   assert.match(fs.readFileSync(path.join(f.copy, 'SKILL.md'), 'utf8'), /^name: frontend-design-lab$/m);
 });
+
+test('the build record holds each kept copy as that build made it: its first build, and a build after the original changed', (t) => {
+  const f = keptFixture(t);
+  const lockOf = () => JSON.parse(fs.readFileSync(path.join(f.paths.agentforgeDir, 'lock.json'), 'utf8')).skills[NAME];
+  f.build();
+  assert.equal(lockOf().digest, digestSkill(f.copy).digest, 'recorded on its first build, not left unknown');
+  fs.writeFileSync(path.join(f.original, 'notes.txt'), 'changed\n');
+  const second = f.build();
+  assert.ok(second.lock.changes.changed.includes(NAME), 'this build says the kept copy changed');
+  assert.equal(lockOf().digest, digestSkill(f.copy).digest, 'the record matches the regenerated copy');
+});
