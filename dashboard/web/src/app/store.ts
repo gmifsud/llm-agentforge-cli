@@ -147,7 +147,8 @@ export class Store {
   reason(skill: Skill): string {
     const c = this.catalog(); if (!c) return '';
     if (!c.mergeAvailable) return 'Unknown';
-    if (c.winnerIds.includes(skill.id)) return 'In the library';
+    // A kept copy saved but not yet built reads the original's folder; agents see it only after a rebuild.
+    if (c.winnerIds.includes(skill.id)) return skill.kept?.built === false ? 'Kept copy, appears after the library is rebuilt' : 'In the library';
     const col = this.collision(skill.id); if (!col) return 'Not in the library';
     if (col.identicalIds.includes(skill.id)) return 'Identical to the one in use';
     return col.by === 'choice' ? 'You chose another' : col.by === 'order' ? 'Lower in your source order' : 'Lower in the default order';

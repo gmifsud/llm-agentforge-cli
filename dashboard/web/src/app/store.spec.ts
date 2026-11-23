@@ -628,6 +628,19 @@ describe('client state', () => {
       } finally { warn.mockRestore(); }
     });
 
+    it('a kept copy not built yet says it appears after the library is rebuilt, on the Skills page too', async () => {
+      const kept = (built: boolean) => ({ id: 'kept-tdd', sourceId: 'b', name: 'tdd-lab', relativePath: 'tdd', kept: { fromSkill: 'tdd', fromSourceId: 'b', stale: false, built, description: 'Lab.' } });
+      const withKept = (built: boolean): Catalog => { const base = withIssues([]); return { ...base, skills: [...base.skills, kept(built)], winnerIds: [...base.winnerIds, 'kept-tdd'] }; };
+      store.catalog.set(withKept(false));
+      expect(store.reason(store.skillById('kept-tdd')!)).toBe('Kept copy, appears after the library is rebuilt');
+      store.skillQuery.set('tdd-lab');
+      const fixture = TestBed.createComponent(Library);
+      await fixture.whenStable();
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain('Kept copy, appears after the library is rebuilt');
+      store.catalog.set(withKept(true));
+      expect(store.reason(store.skillById('kept-tdd')!)).toBe('In the library');
+    });
+
     it('a missing issue needs no clash; Remove queues the unkeep and a rebuild', async () => {
       store.catalog.set(withIssues([issue({ name: 'gone-copy', fromSkill: 'gone', fromSourceId: null, kind: 'missing' })], []));
       expect(store.attention().map(r => [r.name, r.kind])).toEqual([['gone', 'missing']]);
