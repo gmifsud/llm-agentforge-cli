@@ -105,9 +105,20 @@ function resolveCommand(command) {
   const e = new Error(`${command} not found`); e.code = 'ENOENT'; throw e;
 }
 
+/**
+ * How to start a resolved command with these arguments. PowerShell drops an empty argument on its way through -File,
+ * so a .ps1 shim is never given one: its .cmd sibling is used instead, and without one the call is refused.
+ */
+function launchFor(resolved, args, exists = fs.existsSync) {
+  if (resolved.kind !== 'ps1' || !args.includes('')) return resolved;
+  const cmd = resolved.file.replace(/\.ps1$/i, '.cmd');
+  if (exists(cmd)) return { kind: 'cmd', file: cmd };
+  throw failure('VERIFY_ARGS', 'an empty argument cannot be passed safely through a PowerShell shim');
+}
+
 /** `input` is written to the tool's standard input: the way to hand it text that must not pass through a command line. */
 function runTool(command, args, { cwd, timeoutMs, input = '' }) {
-  const resolved = resolveCommand(command);
+  const resolved = launchFor(resolveCommand(command), args);
   const opts = { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, shell: false, input, windowsHide: true };
   let res;
   if (resolved.kind === 'exe') res = spawnSync(resolved.file, args, opts);
@@ -122,4 +133,4 @@ function runTool(command, args, { cwd, timeoutMs, input = '' }) {
   return `${res.stdout || ''}\n${res.stderr || ''}`;
 }
 
-module.exports = { verifyTarget, runTool, sampleSkills, question, TOOLS, DEFAULT_TOOL };
+module.exports = { verifyTarget, runTool, launchFor, sampleSkills, question, TOOLS, DEFAULT_TOOL };

@@ -75,3 +75,14 @@ test('not wired and unavailable are reported, not thrown', (t) => {
   fs.writeFileSync(path.join(proj, '.agents', 'skills', 'alpha', 'SKILL.md'), 'x');
   assert.equal(verifyTarget({ projectRoot: proj, target: 'generic', tool: 'antigravity', run: answer('alpha') }).tool, 'antigravity');
 });
+
+test('an empty argument never goes through a PowerShell shim: the .cmd beside it is used, or the call is refused', () => {
+  const { launchFor } = require('../src/application/verify');
+  const ps1 = { kind: 'ps1', file: 'C:\npm\claude.ps1' };
+  const withCmd = (p) => p === 'C:\npm\claude.cmd';
+  assert.deepEqual(launchFor(ps1, ['-p', '--tools', ''], withCmd), { kind: 'cmd', file: 'C:\npm\claude.cmd' });
+  assert.throws(() => launchFor(ps1, ['-p', '--tools', ''], () => false), (e) => e.code === 'VERIFY_ARGS' && /empty argument/.test(e.message));
+  assert.deepEqual(launchFor(ps1, ['-p', '--tools', 'x'], () => false), ps1, 'no empty argument: the shim is used as before');
+  const exe = { kind: 'exe', file: 'C:\bin\claude.exe' };
+  assert.deepEqual(launchFor(exe, ['--tools', ''], () => false), exe, 'an executable takes an empty argument as it is');
+});

@@ -121,3 +121,11 @@ test('texts over 24576 bytes are cut with a note', () => {
   assert.ok(Buffer.byteLength(input) < 2 * 24576 + 5000);
   assert.doesNotMatch(input, /\uFFFD/);
 });
+
+test('a tool that cannot be given an empty argument safely gives the fallback, not a failure', () => {
+  const { failure } = require('../src/domain/errors');
+  const r = ask(() => { throw failure('VERIFY_ARGS', 'an empty argument cannot be passed safely through a PowerShell shim'); });
+  assert.equal(r.by, 'fallback');
+  assert.match(r.reason, /empty argument/);
+  assert.match(r.name, /^pdf-/);
+});
