@@ -414,6 +414,25 @@ describe('client state', () => {
         http.expectNone(URL);
       });
 
+      it('a row button waits for a free slot while suggestAll has two requests open', async () => {
+        store.catalog.set(threeOpen());
+        const run = store.suggestAll(['tdd', 'x']);
+        await settle();
+        const open = http.match(URL);
+        expect(open.length).toBe(2);
+        const single = store.suggestOne('brainstorming');
+        await settle();
+        expect(http.match(URL).length).toBe(0);
+        open[0].flush({ suggestions: [suggestion('vault', 'tdd-gate')] });
+        await settle();
+        const third = http.match(URL);
+        expect(third.map(r => r.request.body.skill)).toEqual(['brainstorming']);
+        open[1].flush({ suggestions: [suggestion('beta', 'x-b')] });
+        third[0].flush({ suggestions: [suggestion('alpha', 'brainstorming-gate')] });
+        await run; await single;
+        expect(store.suggestErrors().size).toBe(0);
+      });
+
       it('suggestAll leaves out clashes that already have suggestions or are not in the names given', async () => {
         store.catalog.set(threeOpen());
         store.suggestions.set(new Map([['tdd', [suggestion('vault', 'tdd-gate') as any]]]));

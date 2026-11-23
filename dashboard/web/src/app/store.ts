@@ -186,6 +186,15 @@ export class Store {
   suggestErrors = signal<Map<string, string>>(new Map());
   /** True while suggestAll is working through its list. */
   suggestRunning = signal(false);
+  private slotsInUse = 0;
+  private slotWaiters: (() => void)[] = [];
+  /** The server runs two suggestions at once; every request, from suggestAll or a row button, waits here for one of two slots. */
+  private async withSlot<T>(run: () => Promise<T>): Promise<T> {
+    if (this.slotsInUse >= SUGGEST_CONCURRENCY) await new Promise<void>(resolve => this.slotWaiters.push(resolve));
+    else this.slotsInUse++;
+    try { return await run(); }
+    finally { const next = this.slotWaiters.shift(); if (next) next(); else this.slotsInUse--; }
+  }
   private sleep(ms: number) { return new Promise<void>(resolve => setTimeout(resolve, ms)); }
 
   /** Clashes that still need a decision and have nothing suggested yet, in queue order. `only` limits them to the names a page is showing. */
@@ -219,7 +228,7 @@ export class Store {
     if (!mainSource) return;
     this.suggesting.update(set => new Set(set).add(skill));
     this.suggestErrors.update(m => { const next = new Map(m); next.delete(skill); return next; });
-    const ask = () => this.post<SuggestResponse>('/suggest', { skill, main: mainSource.key, ...(fresh ? { fresh: true } : {}) });
+    const ask = () => this.withSlot(() => this.post<SuggestResponse>('/suggest', { skill, main: mainSource.key, ...(fresh ? { fresh: true } : {}) }));
     try {
       let res: SuggestResponse;
       try { res = await ask(); }
