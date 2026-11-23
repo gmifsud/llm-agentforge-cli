@@ -103,3 +103,15 @@ test('rewriteFrontmatter inserts missing lines and a missing block', () => {
 test('rewriteFrontmatter refuses a description with a line break', () => {
   assert.throws(() => rewriteFrontmatter('---\nname: a\n---\n', { name: 'a-b', description: 'x\ny' }), { code: 'KEPT_DESCRIPTION' });
 });
+
+test('rewriteFrontmatter preserves each untouched line terminator in mixed endings', () => {
+  const src = '---\nname: a\r\ndescription: old\nlicense: MIT\r\n---\r\nbody\nmore\r\n';
+  assert.equal(rewriteFrontmatter(src, { name: 'a-b', description: 'd' }), '---\nname: a-b\r\ndescription: >-\n  d\nlicense: MIT\r\n---\r\nbody\nmore\r\n');
+});
+
+test('rewriteFrontmatter keeps blank lines that followed a replaced description', () => {
+  assert.equal(
+    rewriteFrontmatter('---\nname: a\ndescription: old\n\nlicense: MIT\n---\nb\n', { name: 'a', description: 'd' }),
+    '---\nname: a\ndescription: >-\n  d\n\nlicense: MIT\n---\nb\n',
+  );
+});
