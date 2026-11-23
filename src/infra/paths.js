@@ -3,6 +3,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { failure } = require('../domain/errors');
+const { validateKept } = require('../domain/kept');
 
 /**
  * Environment-specific defaults are resolved here, in one place, and passed in.
@@ -23,6 +24,7 @@ function createPaths({ homedir, platform = process.platform, scriptDir }) {
     mergedSkills: path.join(agentforgeDir, 'merged-skills'),
     viewsDir: path.join(agentforgeDir, 'views'),
     setAsideDir: path.join(agentforgeDir, 'set-aside'),
+    keptDir: path.join(agentforgeDir, 'kept'),
     templatesDir: scriptDir ? path.join(scriptDir, 'templates') : undefined,
     // The same on every machine, and inside agentforge's own folder. A real vault is configured, not guessed.
     defaultVaultRoot: path.join(agentforgeDir, 'vault'),
@@ -62,12 +64,15 @@ function saveRegistry(paths, registry) {
 
 function loadConfig(paths) {
   if (!fs.existsSync(paths.configJson)) return {};
+  let parsed;
   try {
-    const parsed = JSON.parse(fs.readFileSync(paths.configJson, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    parsed = JSON.parse(fs.readFileSync(paths.configJson, 'utf8'));
   } catch (e) {
     throw failure('CONFIG_CORRUPT', `${paths.configJson} is not valid JSON (${e.message})`);
   }
+  if (!parsed || typeof parsed !== 'object') return {};
+  if (parsed.kept !== undefined) validateKept(parsed.kept, paths.configJson);
+  return parsed;
 }
 
 function atomicWrite(file, content) {

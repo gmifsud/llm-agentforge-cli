@@ -6,6 +6,7 @@ const { discoverSkills } = require('../discovery/discover-skills');
 const { digestSkill } = require('../discovery/skill-digest');
 const { inspectDestination, removeLinkOnly, createDirectoryLink, IS_WIN } = require('../infra/fs-inspect');
 const { refused, failure } = require('../domain/errors');
+const { nameKey } = require('../domain/kept');
 
 /**
  * Compute the merged view: one link per exported skill name.
@@ -100,7 +101,7 @@ function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, 
   return { entries, collisions, identical, clashes, rejected, order };
 }
 
-function key(name) { return IS_WIN ? name.toLowerCase() : name; }
+const key = nameKey;
 
 /**
  * Stage a complete view before replacing the live path. Restore the previous
