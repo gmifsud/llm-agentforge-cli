@@ -4,6 +4,7 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { provideRouter } from '@angular/router';
 import { Store, type Catalog } from './store';
 import { Library } from './library';
+import { KeptIssueRow } from './kept-issues';
 import { ClashRow, ClashQueue } from './clash-queue';
 import { CHANGES_PREFERENCE_KEY } from './changes-presentation';
 
@@ -601,6 +602,37 @@ describe('client state', () => {
       expect(store.tray().map(i => [i.change.kind, i.change.args])).toEqual([
         ['library.rekeep', { name: 'tdd-lab' }], ['library.rekeep', { name: 'tdd-lab', description: 'Use for lab work.' }], ['library.rebuild', undefined]]);
       await flushPreviews();
+    });
+
+    it('a rekeep preview carries the original digest into the queued change', async () => {
+      store.catalog.set(withIssues([issue()]));
+      store.rekeep('tdd-lab');
+      http.expectOne('/api/v1/changes/preview').flush({ kind: 'library.rekeep', title: 'Rekeep', lines: [], conflicts: [], ok: true, args: { name: 'tdd-lab', digest: 'd9' } });
+      await settle();
+      expect(store.tray()[0].change.args).toEqual({ name: 'tdd-lab', digest: 'd9' });
+      await flushPreviews();
+    });
+
+    it('Rename does nothing when there is no clash to go to', () => {
+      store.catalog.set(withIssues([issue({ kind: 'taken', fromSkill: 'gone' })], []));
+      store.view.set('attention');
+      store.renameKept('gone');
+      expect(store.view()).toBe('attention');
+      expect(store.focusedClash()).toBe('');
+    });
+
+    it('offers the right actions for each kind of issue', () => {
+      const labels = (kind: Catalog['keptIssues'][number]['kind']) => {
+        store.catalog.set(withIssues([issue({ kind })]));
+        const fixture = TestBed.createComponent(KeptIssueRow);
+        fixture.componentRef.setInput('issue', issue({ kind }));
+        fixture.detectChanges();
+        return [...(fixture.nativeElement as HTMLElement).querySelectorAll('.actions button')].map(b => b.textContent!.trim());
+      };
+      expect(labels('stale')).toEqual(['Suggest again', 'Keep the description', 'Remove the copy']);
+      expect(labels('missing')).toEqual(['Remove the rule']);
+      expect(labels('is-main')).toEqual(['Remove the rule']);
+      expect(labels('taken')).toEqual(['Rename']);
     });
   });
 });

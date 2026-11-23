@@ -131,7 +131,10 @@ export class Store {
   /** Which clash the Name clashes view should scroll to and focus: set by Rename on a kept copy that cannot take effect. */
   focusedClash = signal('');
   /** Go to the clash that needs another name for a kept copy. */
-  renameKept(clash: string) { this.view.set('collisions'); this.page.set(0); this.focusedClash.set(clash); }
+  renameKept(clash: string) {
+    if (!this.catalog()?.collisions.some(c => c.name === clash)) return;
+    this.view.set('collisions'); this.page.set(0); this.focusedClash.set(clash);
+  }
   readonly clashCounts = computed(() => {
     const all = this.catalog()?.collisions || [];
     // A clash whose differing copies are all kept is decided, whatever chose its main copy.
@@ -402,8 +405,9 @@ export class Store {
         try {
           const preview = await this.post<ChangePreview>('/changes/preview', { change: item.change });
           // The digests the server saw go with the change, so Apply sends what the person was shown.
-          const digests = item.change.kind === 'library.keep' ? preview.args?.['digests'] : undefined;
-          this.tray.update(list => list.map(i => i.uid === uid ? { ...i, preview, ...(digests ? { change: { ...i.change, args: { ...i.change.args, digests } } } : {}) } : i));
+          const pinned = item.change.kind === 'library.keep' ? { digests: preview.args?.['digests'] } : item.change.kind === 'library.rekeep' ? { digest: preview.args?.['digest'] } : {};
+          const carried = Object.fromEntries(Object.entries(pinned).filter(([, v]) => v));
+          this.tray.update(list => list.map(i => i.uid === uid ? { ...i, preview, ...(Object.keys(carried).length ? { change: { ...i.change, args: { ...i.change.args, ...carried } } } : {}) } : i));
         } catch (e) {
           // An item removed while it was being checked is no longer in the list, so these updates are no-ops.
           this.tray.update(list => list.map(i => i.uid === uid ? { ...i, error: message(e) } : i));

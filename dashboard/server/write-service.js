@@ -373,7 +373,7 @@ class WriteService {
       hasDescription ? { tone: 'change', text: 'The description is replaced.' } : { tone: 'note', text: 'The description stays as it is.' },
       { tone: 'note', text: 'Saved in ~/.agentforge/config.json. The copy is rebuilt with the next library rebuild.' },
     ];
-    return { title: `Keep ${rule.name} as it is`, lines, conflicts, ok: conflicts.length === 0, args: hasDescription ? { name: rule.name, description } : { name: rule.name },
+    return { title: `Keep ${rule.name} as it is`, lines, conflicts, ok: conflicts.length === 0, args: { name: rule.name, ...(hasDescription ? { description } : {}), ...(original?.digest ? { digest: original.digest } : {}) },
       run: () => {
         const fresh = this.config();
         const current = (fresh.kept || []).find(r => nameKey(r.name) === nameKey(rule.name));
@@ -381,6 +381,7 @@ class WriteService {
         const clash = clashOf(fresh);
         const now = clash?.candidates.find(c => c.source === current.from.source);
         if (!now || now.digest === null) throw refused('KEPT_CHANGED', 'The original is gone; remove the copy instead.');
+        if (typeof args.digest === 'string' && args.digest !== now.digest) throw refused('KEPT_CHANGED', `${rule.from.skill} changed since you looked. Look at it again.`);
         const kept = (fresh.kept || []).map(r => (r === current ? { ...r, digest: now.digest, ...(hasDescription ? { description } : {}) } : r));
         const next = { ...fresh, kept };
         const prefs = fresh.preferences || {};

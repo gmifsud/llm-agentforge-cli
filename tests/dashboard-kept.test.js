@@ -203,3 +203,18 @@ test('library.rekeep can replace the description, refuses a bad one, and refuses
   assert.equal(gone.ok, false);
   assert.match(gone.conflicts.join(' '), /The original is gone; remove the copy instead\./);
 });
+
+test('library.rekeep refuses at apply time when the original changed since the preview', t => {
+  const f = fixture(t);
+  const svc = new WriteService(f.options);
+  apply(svc, keep());
+  const p = svc.preview({ kind: 'library.rekeep', args: { name: 'frontend-design-lab' } });
+  assert.equal(p.ok, true);
+  assert.equal(p.args.digest, digestOf(path.join(f.source, 'frontend-design')));
+  const before = readConfig(f).kept[0];
+  fs.appendFileSync(path.join(f.source, 'frontend-design', 'SKILL.md'), '\nMore.\n');
+  const [r] = apply(svc, { kind: 'library.rekeep', args: p.args });
+  assert.equal(r.status, 'refused');
+  assert.match(r.message, /changed since you looked/);
+  assert.deepEqual(readConfig(f).kept[0], before);
+});

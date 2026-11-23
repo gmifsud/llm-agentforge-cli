@@ -14,7 +14,7 @@ export function keptIssueLine(issue: KeptIssue, s: Store): string {
     const other = (s.catalog()?.skills || []).find(x => !x.kept && x.name.toLowerCase() === issue.name.toLowerCase());
     return `${issue.name} is now also a skill in ${other ? s.sourceName(other.sourceId) : 'a source'}, so the copy is not in the library.`;
   }
-  return `${issue.name} is not in the library: ${original} now keeps the plain name ${issue.fromSkill}.`;
+  return `${issue.name} is not in the library: ${original} is now the only copy, so a kept copy would duplicate it.`;
 }
 
 /** One kept copy that needs a look, with what a person can do about it. */
@@ -37,6 +37,9 @@ export function keptIssueLine(issue: KeptIssue, s: Store): string {
           <button type="button" class="quiet tiny" (click)="s.unkeep(issue().name)" [disabled]="locked()" [attr.aria-label]="'Remove the copy ' + issue().name">Remove the copy</button>
         }
         @case ('missing') {
+          <button type="button" class="quiet tiny" (click)="s.unkeep(issue().name)" [disabled]="locked()" [attr.aria-label]="'Remove the rule for ' + issue().name">Remove the rule</button>
+        }
+        @case ('is-main') {
           <button type="button" class="quiet tiny" (click)="s.unkeep(issue().name)" [disabled]="locked()" [attr.aria-label]="'Remove the rule for ' + issue().name">Remove the rule</button>
         }
         @default {
