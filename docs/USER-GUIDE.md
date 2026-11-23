@@ -373,7 +373,7 @@ Agentforge prefers a clear refusal to a guess. The common ones:
 | Path | What | Safe to delete? |
 | :-- | :-- | :-- |
 | `~/.agentforge/repos.json` | Registered sources | No; this is your configuration |
-| `~/.agentforge/config.json` | Optional `vaultRoot`, and the `kept` rules | Yes; falls back to env var or default |
+| `~/.agentforge/config.json` | Optional `vaultRoot`, your kept rules and your clash choices | Only if you accept the loss: `vaultRoot` falls back to the env var or default, but the kept rules and choices go with it, and those kept copies leave the library at the next build |
 | `~/.agentforge/kept/<name>/` | A kept copy of a skill whose name clashed, made from its `kept` rule in `config.json` | Yes; the next build writes it again |
 | `~/.agentforge/repos/<id>/` | Git clones | Yes; `repo fetch` recreates them |
 | `~/.agentforge/merged-skills/` | The default view (links only) | Yes; `repo sync --no-fetch` recreates it |
