@@ -2,8 +2,8 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { savedChangesPreference, saveChangesPreference } from './changes-presentation';
-import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, TargetReport, Skill, Collision, SkillComparison } from '../../../contracts';
-export type { Catalog, Context, Skill, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, DiffHunk, LintFinding } from '../../../contracts';
+import type { Catalog, Context, SetRule, SkillDocument, Change, ChangeKind, ChangePreview, ChangeResult, ApplyResponse, Source, Suggestion, SuggestResponse, TargetReport, Skill, Collision, KeptIssue, SkillComparison } from '../../../contracts';
+export type { Catalog, Context, Skill, KeptIssue, SetRule, SetInfo, Shadow, SetAsideItem, Adoptable, Source, ProjectReport, TargetReport, Change, ChangePreview, ChangeResult, Feeds, Collision, SkillComparison, Suggestion, DiffHunk, LintFinding } from '../../../contracts';
 
 export const PAGE_SIZE = 50;
 const API = '/api/v1';
@@ -13,12 +13,30 @@ function message(error: any): string { return error?.error?.error?.message || 'T
 
 /** Pipeline order: sources change first, then the library, then projects. */
 const STAGE: Record<ChangeKind, number> = {
-  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.order': 0, 'source.fetch': 1,
+  'source.attach': 0, 'source.detach': 0, 'library.prefer': 0, 'library.keep': 0, 'library.unkeep': 0, 'library.rekeep': 0, 'library.order': 0, 'source.fetch': 1,
   'library.rebuild': 2, 'set.save': 2, 'set.remove': 3, 'project.add': 3, 'project.forget': 3, 'skill.setaside': 3, 'skill.restore': 3, 'project.wire': 4, 'project.adopt': 4, 'project.verify': 5,
 };
 
 /** Steps that stand alone, as on the server: a fetch or a check that cannot be made does not cancel the others. */
 const INDEPENDENT = new Set<ChangeKind>(['source.fetch', 'project.verify']);
+
+/** One clash to settle: the copy that keeps the name, and a name for each distinct other copy (`also`: copies identical to it). */
+export interface QueueRow { collision: Collision; main: Skill; others: { skill: Skill; also: Skill[] }[]; planned: boolean }
+
+const KEPT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const KEPT_NAME_MAX = 64;
+const KEPT_DESCRIPTION_MAX = 900;
+/** A description as agents read it back from its folded block: runs of spaces and tabs are one space. Line breaks stay, to be refused. */
+const foldDescription = (description: string) => description.replace(/[^\S\r\n]+/g, ' ').trim();
+/** The server runs two suggestions at a time; asking for more only earns a BUSY reply. */
+const SUGGEST_CONCURRENCY = 2;
+const SUGGEST_BUSY_RETRY_MS = 2000;
+
+/**
+ * One thing in Need a look. `choice` rows ('changed', 'default') are clashes; the rest come from a kept copy's issue, with the clash it
+ * belongs to (null once the original is gone). `name` is always the clash's name.
+ */
+export interface AttentionRow { key: string; name: string; kind: 'changed' | 'default' | KeptIssue['kind']; collision: Collision | null; issue: KeptIssue | null; candidateIds: string[] }
 
 export type SkillView = 'all' | 'merged' | 'collisions' | 'attention' | 'problems';
 export interface TrayItem { uid: number; change: Change; preview: ChangePreview | null; error: string; deferred: boolean }
@@ -94,28 +112,173 @@ export class Store {
   readonly visibleSkills = computed(() => this.filteredSkills().slice(this.page() * PAGE_SIZE, (this.page() + 1) * PAGE_SIZE));
 
   // ─── same-name skills ──────────────────────────────────────────────────────
-  /** Clashes a person should look at: a copy changed since they chose, or only the built-in order decided. Changed first. */
-  readonly attention = computed(() => {
-    const all = this.catalog()?.collisions || [];
-    return [...all.filter(c => c.kind === 'changed'), ...all.filter(c => c.kind === 'default')];
+  /**
+   * What a person should look at: clashes whose choice has changed or that only the default order decided, and one row for each
+   * kept copy with an issue. A changed clash that stale kept copies fully explain is left out, so one changed original gives one row.
+   */
+  readonly attention = computed<AttentionRow[]>(() => {
+    const c = this.catalog(); if (!c) return [];
+    const issues = c.keptIssues || [];
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const explained = (col: Collision) => col.changedSourceIds.length > 0 &&
+      col.changedSourceIds.every(id => issues.some(i => i.kind === 'stale' && same(i.fromSkill, col.name) && i.fromSourceId === id));
+    const open = c.collisions.filter(col => !col.resolved);
+    const row = (col: Collision): AttentionRow => ({ key: `clash:${col.name}`, name: col.name, kind: col.kind === 'changed' ? 'changed' : 'default', collision: col, issue: null, candidateIds: col.candidateIds });
+    const issueRows = issues.map((issue): AttentionRow => {
+      const col = c.collisions.find(x => same(x.name, issue.fromSkill)) || null;
+      return { key: `kept:${issue.name}`, name: col?.name ?? issue.fromSkill, kind: issue.kind, collision: col, issue, candidateIds: col?.candidateIds ?? [] };
+    });
+    return [...open.filter(col => col.kind === 'changed' && !explained(col)).map(row), ...issueRows, ...open.filter(col => col.kind === 'default').map(row)];
   });
+  /** Which clash the Name clashes view should scroll to and focus: set by Rename on a kept copy that cannot take effect. */
+  focusedClash = signal('');
+  /** Go to the clash that needs another name for a kept copy. */
+  renameKept(clash: string) {
+    if (!this.catalog()?.collisions.some(c => c.name === clash)) return;
+    this.view.set('collisions'); this.page.set(0); this.focusedClash.set(clash);
+  }
   readonly clashCounts = computed(() => {
     const all = this.catalog()?.collisions || [];
-    const n = (k: string[]) => all.filter(c => k.includes(c.kind)).length;
-    return { identical: n(['identical']), decided: n(['choice', 'order']), needs: n(['default']), changed: n(['changed']), total: all.length };
+    // A clash whose differing copies are all kept is decided, whatever chose its main copy.
+    const open = all.filter(c => !c.resolved || c.kind === 'identical');
+    const n = (k: string[]) => open.filter(c => k.includes(c.kind)).length;
+    return { identical: n(['identical']), decided: all.filter(c => c.kind !== 'identical' && (c.resolved || ['choice', 'order'].includes(c.kind))).length, needs: n(['default']), changed: n(['changed']), total: all.length };
   });
   clashByName(name: string) { return this.catalog()?.collisions.find(c => c.name === name) || null; }
   /** Why a skill is or is not what your agents get. */
   reason(skill: Skill): string {
     const c = this.catalog(); if (!c) return '';
     if (!c.mergeAvailable) return 'Unknown';
-    if (c.winnerIds.includes(skill.id)) return 'In the library';
+    // A kept copy saved but not yet built reads the original's folder; agents see it only after a rebuild.
+    if (c.winnerIds.includes(skill.id)) return skill.kept?.built === false ? 'Kept copy, appears after the library is rebuilt' : 'In the library';
     const col = this.collision(skill.id); if (!col) return 'Not in the library';
     if (col.identicalIds.includes(skill.id)) return 'Identical to the one in use';
     return col.by === 'choice' ? 'You chose another' : col.by === 'order' ? 'Lower in your source order' : 'Lower in the default order';
   }
   findingsFor(skillId: string) { return (this.catalog()?.health?.findings || []).filter(f => f.skillId === skillId); }
   shadowsFor(skillId: string) { return (this.catalog()?.health?.shadows || []).filter(s => s.skillId === skillId); }
+
+  // ─── the name clashes queue ────────────────────────────────────────────────
+  /** Clashes with something to decide, unresolved first. Copies identical to each other need nothing. */
+  readonly queueRows = computed<QueueRow[]>(() => {
+    const c = this.catalog(); if (!c) return [];
+    const rows = c.collisions.filter(col => col.kind !== 'identical').flatMap(collision => {
+      const main = this.skillById(collision.winnerId);
+      return main ? [{ collision, main, others: this.othersFor(collision, main), planned: this.keepPlanned(collision.name) }] : [];
+    });
+    return [...rows.filter(r => !r.collision.resolved), ...rows.filter(r => r.collision.resolved)];
+  });
+  /** Copies that differ from `main`, one entry per distinct content, naming the holder highest in the source order. */
+  othersFor(collision: Collision, main: Skill): { skill: Skill; also: Skill[] }[] {
+    const c = this.catalog(); if (!c) return [];
+    const rank = (s: Skill) => { const i = c.sourceOrder.indexOf(s.sourceId); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+    const candidates = collision.candidateIds.map(id => this.skillById(id)).filter((x): x is Skill => !!x && x.id !== main.id)
+      .filter(x => x.digest == null || x.digest !== main.digest).sort((a, b) => rank(a) - rank(b));
+    const out: { skill: Skill; also: Skill[] }[] = [];
+    const byDigest = new Map<string, { skill: Skill; also: Skill[] }>();
+    for (const skill of candidates) {
+      const held = skill.digest ? byDigest.get(skill.digest) : undefined;
+      if (held) { held.also.push(skill); continue; }
+      const entry = { skill, also: [] as Skill[] };
+      out.push(entry);
+      if (skill.digest) byDigest.set(skill.digest, entry);
+    }
+    return out;
+  }
+  keepPlanned(name: string) { return this.pendingFor('library.keep', a => a['skill'] === name).length > 0; }
+  /**
+   * Why `name` cannot be a kept copy of `plain`, or null. Mirrors the server's check; names compare in lower case here.
+   * `own` are the clash's kept names now: saving the clash again may reuse them, as the server allows.
+   */
+  nameProblem(plain: string, name: string, own: readonly string[] = []): string | null {
+    if (!KEPT_NAME_PATTERN.test(name)) return 'use lower-case letters, digits and single hyphens only';
+    if (name.length > KEPT_NAME_MAX) return `at most ${KEPT_NAME_MAX} characters`;
+    const prefix = `${plain.toLowerCase()}-`;
+    if (!name.startsWith(prefix)) return `must start with "${prefix}"`;
+    const taken = new Set<string>((this.catalog()?.skills || []).map(s => s.name.toLowerCase()));
+    for (const item of this.pendingFor('library.keep', () => true)) {
+      for (const k of (item.change.args?.['keep'] as { name: string }[] | undefined) || []) taken.add(k.name.toLowerCase());
+    }
+    for (const k of own) taken.delete(k.toLowerCase());
+    return taken.has(name.toLowerCase()) ? 'that name is already in use' : null;
+  }
+  /** The kept copy made from `clash`'s copy in `sourceId`, if there is one. */
+  keptFor(clash: string, sourceId: string): Skill | null {
+    return (this.catalog()?.skills || []).find(s => !!s.kept && s.kept.fromSkill.toLowerCase() === clash.toLowerCase() && s.kept.fromSourceId === sourceId) || null;
+  }
+  descriptionProblem(description: string): string | null {
+    if (description.trim() === '') return 'must not be empty';
+    if (/[\r\n]/.test(description)) return 'must be a single paragraph with no line breaks';
+    if (description.length > KEPT_DESCRIPTION_MAX) return `at most ${KEPT_DESCRIPTION_MAX} characters`;
+    return null;
+  }
+
+  // ─── suggested names ───────────────────────────────────────────────────────
+  /** Claude's (or the fallback's) suggestions per clash name. The queue fills untouched fields from these; nothing here changes the library. */
+  suggestions = signal<Map<string, Suggestion[]>>(new Map());
+  /** While suggestAll runs, and left in place afterwards: clashes handled (suggested or failed) out of those it set out to do. */
+  suggestProgress = signal<{ done: number; total: number } | null>(null);
+  /** Clashes asked about right now, by name. */
+  suggesting = signal<ReadonlySet<string>>(new Set());
+  /** Why a clash could not be suggested, by name. */
+  suggestErrors = signal<Map<string, string>>(new Map());
+  /** True while suggestAll is working through its list. */
+  suggestRunning = signal(false);
+  private slotsInUse = 0;
+  private slotWaiters: (() => void)[] = [];
+  /** The server runs two suggestions at once; every request, from suggestAll or a row button, waits here for one of two slots. */
+  private async withSlot<T>(run: () => Promise<T>): Promise<T> {
+    if (this.slotsInUse >= SUGGEST_CONCURRENCY) await new Promise<void>(resolve => this.slotWaiters.push(resolve));
+    else this.slotsInUse++;
+    try { return await run(); }
+    finally { const next = this.slotWaiters.shift(); if (next) next(); else this.slotsInUse--; }
+  }
+  private sleep(ms: number) { return new Promise<void>(resolve => setTimeout(resolve, ms)); }
+
+  /** Clashes that still need a decision and have nothing suggested yet, in queue order. `only` limits them to the names a page is showing. */
+  suggestTargets(only?: readonly string[]): QueueRow[] {
+    return this.queueRows().filter(r => !r.collision.resolved && !r.planned && r.others.length > 0 && !this.suggestions().has(r.collision.name) && (!only || only.includes(r.collision.name)));
+  }
+
+  /** One short question per clash, at most two at a time. A BUSY reply is tried once more after two seconds; any other failure is kept against that clash and the rest carry on. */
+  async suggestAll(only?: readonly string[]): Promise<void> {
+    if (this.suggestRunning()) return;
+    const targets = this.suggestTargets(only).map(r => r.collision.name);
+    if (!targets.length) return;
+    this.suggestRunning.set(true);
+    this.suggestProgress.set({ done: 0, total: targets.length });
+    const queue = [...targets];
+    const worker = async () => {
+      for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+        await this.suggestClash(name, false, undefined, true);
+        this.suggestProgress.update(p => p && { ...p, done: p.done + 1 });
+      }
+    };
+    try { await Promise.all(Array.from({ length: Math.min(SUGGEST_CONCURRENCY, targets.length) }, worker)); }
+    finally { this.suggestRunning.set(false); }
+  }
+
+  /** Ask about one clash. `fresh` bypasses the server's cache; `main` is the copy keeping the plain name when the person has chosen another than the row's. */
+  suggestOne(skill: string, fresh = false, main?: Source): Promise<void> { return this.suggestClash(skill, fresh, main, false); }
+  private async suggestClash(skill: string, fresh: boolean, main: Source | undefined, retryBusy: boolean): Promise<void> {
+    const row = this.queueRows().find(r => r.collision.name === skill);
+    const mainSource = main || (row ? this.sourceById(row.main.sourceId) : null);
+    if (!mainSource) return;
+    this.suggesting.update(set => new Set(set).add(skill));
+    this.suggestErrors.update(m => { const next = new Map(m); next.delete(skill); return next; });
+    const ask = () => this.withSlot(() => this.post<SuggestResponse>('/suggest', { skill, main: mainSource.key, ...(fresh ? { fresh: true } : {}) }));
+    try {
+      let res: SuggestResponse;
+      try { res = await ask(); }
+      catch (e: any) {
+        if (!retryBusy || e?.error?.error?.code !== 'BUSY') throw e;
+        await this.sleep(SUGGEST_BUSY_RETRY_MS);
+        res = await ask();
+      }
+      this.suggestions.update(m => new Map(m).set(skill, res.suggestions));
+    } catch (e) { this.suggestErrors.update(m => new Map(m).set(skill, message(e))); }
+    finally { this.suggesting.update(set => { const next = new Set(set); next.delete(skill); return next; }); }
+  }
 
   // ─── source order ──────────────────────────────────────────────────────────
   /** Sources highest priority first; a queued reorder is shown as if already applied, so the list answers "what will it be". */
@@ -253,7 +416,10 @@ export class Store {
         const uid = item.uid;
         try {
           const preview = await this.post<ChangePreview>('/changes/preview', { change: item.change });
-          this.tray.update(list => list.map(i => i.uid === uid ? { ...i, preview } : i));
+          // The digests the server saw go with the change, so Apply sends what the person was shown.
+          const pinned = item.change.kind === 'library.keep' ? { digests: preview.args?.['digests'] } : item.change.kind === 'library.rekeep' ? { digest: preview.args?.['digest'] } : {};
+          const carried = Object.fromEntries(Object.entries(pinned).filter(([, v]) => v));
+          this.tray.update(list => list.map(i => i.uid === uid ? { ...i, preview, ...(Object.keys(carried).length ? { change: { ...i.change, args: { ...i.change.args, ...carried } } } : {}) } : i));
         } catch (e) {
           // An item removed while it was being checked is no longer in the list, so these updates are no-ops.
           this.tray.update(list => list.map(i => i.uid === uid ? { ...i, error: message(e) } : i));
@@ -331,6 +497,16 @@ export class Store {
   prefer(skill: string, source: Source | null) {
     this.queue({ kind: 'library.prefer', args: source && source.kind !== 'primary' ? { skill, source: source.key } : source ? { skill, source: 'vault' } : { skill } }, { kind: 'library.rebuild' });
   }
+  /** Keep the differing copies under names of their own (`keep`), with `main` holding the plain name. */
+  keep(skill: string, main: Source, keep: { source: Source; name: string; description: string }[]) {
+    this.queue({ kind: 'library.keep', args: { skill, main: main.key, keep: keep.map(k => ({ source: k.source.key, name: k.name, description: foldDescription(k.description) })) } }, { kind: 'library.rebuild' });
+  }
+  /** Accept that a kept copy's original changed: follow it as it is now, with a new description when one is given. */
+  rekeep(name: string, description?: string) {
+    this.queue({ kind: 'library.rekeep', args: description === undefined ? { name } : { name, description: foldDescription(description) } }, { kind: 'library.rebuild' });
+  }
+  /** Stop keeping a copy under its own name. */
+  unkeep(name: string) { this.queue({ kind: 'library.unkeep', args: { name } }, { kind: 'library.rebuild' }); }
   addProject(path: string) { this.queue({ kind: 'project.add', args: { path } }); }
   forgetProject(projectId: string) { this.queue({ kind: 'project.forget', args: { projectId } }); }
   wire(projectId: string, targets: string[], opts: { writeDocs?: boolean; link?: string; repoint?: boolean } = {}) {

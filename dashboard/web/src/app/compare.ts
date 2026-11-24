@@ -4,17 +4,20 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs';
 import { Store, type DiffHunk } from './store';
+import { ClashRow } from './clash-queue';
 
 interface Row { skip?: number; left?: { n: number; text: string; changed: boolean }; right?: { n: number; text: string; changed: boolean } }
 
 /** Two copies of one skill, side by side, with one decision to make: which one your agents get. */
-@Component({ selector: 'af-compare', imports: [RouterLink, DatePipe], template: `
+@Component({ selector: 'af-compare', imports: [RouterLink, DatePipe, ClashRow], template: `
   <a routerLink="/" class="link back-link">Back to Fleet</a>
   @if (clash(); as col) {
     <header class="page-head">
       <h1>{{ col.name }}</h1>
       <p>{{ candidates().length }} sources have a skill with this name. Your agents get one of them.{{ missing() }}</p>
     </header>
+
+    @if (queueRow(); as row) { <af-clash-row [row]="row" /> }
 
     <div class="cards">
       @for (cand of candidates(); track cand.skill.id) {
@@ -28,6 +31,7 @@ interface Row { skip?: number; left?: { n: number; text: string; changed: boolea
               @if (info.fileCount !== null) { {{ info.fileCount }} {{ info.fileCount === 1 ? 'file' : 'files' }}@if (info.scriptCount) {, <strong>{{ info.scriptCount }} that can run</strong>}. }
             </p>
           }
+          @if (keptAs(cand.skill.sourceId); as kept) { <p class="state live">Kept as {{ kept }}</p> }
           @if (cand.inUse) {
             <p class="state live">{{ inUseReason(col.by) }}</p>
             @if (col.kind === 'changed') { <p class="state caution">A copy has changed since you chose. Check it is still the one you want.</p> }
@@ -121,6 +125,12 @@ export class Compare {
       return { skill, sourceId: skill.sourceId, sourceKey: source?.key || '', sourceName: this.s.sourceName(skill.sourceId), inUse: skill.id === col.winnerId, identical: col.identicalIds.includes(skill.id) };
     }).sort((a, b) => Number(b.inUse) - Number(a.inUse));
   });
+  queueRow = computed(() => this.s.queueRows().find(r => r.collision.name === this.name()) || null);
+  /** The names under which this source's copy is also kept, when it has a rule. */
+  keptAs(sourceId: string) {
+    const name = this.name();
+    return (this.s.catalog()?.skills || []).filter(k => k.kept && k.kept.fromSkill === name && k.kept.fromSourceId === sourceId).map(k => k.name).join(', ');
+  }
   planned = computed(() => this.s.pendingFor('library.prefer', a => a['skill'] === this.name())[0]?.change.args?.['source'] as string | undefined);
   differing = computed(() => (this.s.comparison()?.fields || []).filter(f => !f.same));
   sameFields = computed(() => (this.s.comparison()?.fields || []).filter(f => f.same).map(f => f.key));

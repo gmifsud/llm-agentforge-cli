@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { failure } = require('../domain/errors');
 
 /**
  * Rules a SKILL.md must meet to be invocable, and which agent tools each rule
@@ -44,6 +45,52 @@ function parseFrontmatter(text) {
     fields[key] = value;
   }
   return { fields, body: lines.slice(end + 1).join('\n') };
+}
+
+/**
+ * Rewrite only `name:` and `description:` in a SKILL.md frontmatter block,
+ * leaving every other byte alone (BOM, each line's own terminator, other keys,
+ * body). The description is written as a folded block scalar so any
+ * single-line text round-trips through parseFrontmatter. Missing keys are
+ * appended before the closing `---`; a missing block is prepended. Inserted
+ * lines use CRLF if the text contains one, else LF; replaced lines keep their own.
+ */
+function rewriteFrontmatter(text, { name, description }) {
+  if (/[\r\n]/.test(description)) throw failure('KEPT_DESCRIPTION', 'A kept skill description must be a single line.');
+  const bom = text.startsWith('﻿') ? '﻿' : '';
+  const src = text.slice(bom.length);
+  const nl = src.includes('\r\n') ? '\r\n' : '\n';
+  const parts = src.split(/(\r?\n)/);
+  const lines = [];
+  for (let i = 0; i < parts.length; i += 2) lines.push({ t: parts[i], e: parts[i + 1] ?? '' });
+  const block = (eol) => [`name: ${name}${eol}`, `description: >-${eol}`, `  ${description}${eol}`];
+  const end = lines[0].t === '---' ? lines.findIndex((l, i) => i > 0 && l.t === '---') : -1;
+  if (end === -1) return `${bom}---${nl}${block(nl).join('')}---${nl}${src}`;
+  const out = [lines[0].t + lines[0].e];
+  let hasName = false;
+  let hasDescription = false;
+  for (let i = 1; i < end; i++) {
+    const key = /^([A-Za-z0-9_-]+):/.exec(lines[i].t);
+    const eol = lines[i].e;
+    if (key && key[1] === 'name' && !hasName) {
+      hasName = true;
+      out.push(`name: ${name}${eol}`);
+    } else if (key && key[1] === 'description' && !hasDescription) {
+      hasDescription = true;
+      out.push(`description: >-${eol}`, `  ${description}${eol}`);
+      const run = [];
+      while (i + 1 < end && (/^\s+/.test(lines[i + 1].t) || lines[i + 1].t === '')) run.push(lines[++i]);
+      let keep = run.length;
+      while (keep > 0 && run[keep - 1].t.trim() === '') keep--;
+      for (const l of run.slice(keep)) out.push(l.t + l.e);
+    } else {
+      out.push(lines[i].t + eol);
+    }
+  }
+  if (!hasName) out.push(`name: ${name}${nl}`);
+  if (!hasDescription) out.push(`description: >-${nl}`, `  ${description}${nl}`);
+  for (let i = end; i < lines.length; i++) out.push(lines[i].t + lines[i].e);
+  return bom + out.join('');
 }
 
 const finding = (code, severity, tools, message) => ({ code, severity, tools, message });
@@ -121,4 +168,4 @@ function personalLevels(homedir) {
   ];
 }
 
-module.exports = { parseFrontmatter, lintSkill, findShadows, personalLevels, DESCRIPTION_CAP };
+module.exports = { parseFrontmatter, rewriteFrontmatter, lintSkill, findShadows, personalLevels, DESCRIPTION_CAP };

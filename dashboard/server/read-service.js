@@ -8,6 +8,7 @@ const { createPaths, loadConfig, loadRegistry, resolvePrimarySource, resolveDepl
 const { sourceRootFor } = require('../../src/application/sources');
 const { discoverSkills } = require('../../src/discovery/discover-skills');
 const { computeView } = require('../../src/deployment/build-view');
+const { distinctOthers } = require('../../src/domain/kept');
 const { inspectProject } = require('../../src/application/project');
 const { TARGETS } = require('../../src/domain/targets');
 const { samePath, isWithinLexical } = require('../../src/infra/fs-inspect');
@@ -264,31 +265,54 @@ class ReadService {
       }
       if (skills.length > LIMITS.candidates) throw new ReadError(ERROR.LIMIT, `Catalogue exceeds ${LIMITS.candidates} candidates.`);
     }
-    let winnerIds = [], collisions = [], library = null, health = null, sourceOrder = [], sinceLastBuild = null;
+    let winnerIds = [], collisions = [], keptIssues = [], library = null, health = null, sourceOrder = [], sinceLastBuild = null;
     const preferences = this.config.preferences && typeof this.config.preferences === 'object' ? this.config.preferences : {};
     // A missing source cannot be treated as an intentionally empty contribution.
     const mergeAvailable = sources.every(s => s.state === 'available');
     if (mergeAvailable) {
       const view = computeView({ primaryRoot: context.primaryRoot, repos, preferences, sourcePriority: this.config.sourcePriority,
         cacheRootFor: repo => sourceRootFor(this.paths, repo), forceExternal: false,
+        kept: this.config.kept || [], keptDir: this.paths.keptDir,
         discover: (root, opts) => observations.get((opts?.manifest === false ? sources[0] : sources.find(s => s.kind !== 'primary' && s.root === root)).id),
       });
+      const byName = k => (k === 'vault' ? sources[0] : sources.find(s => s.kind !== 'primary' && s.name === k));
+      // A kept copy is a skill of its own: its folder once built, the original's folder until then.
+      for (const row of view.kept) {
+        const originalSource = byName(row.from.source);
+        const original = originalSource && skills.find(s => s.sourceId === originalSource.id && documents.get(s.id).directory === row.originalPath);
+        if (!original) throw new ReadError(ERROR.CHANGED, 'Sources changed during the merge observation. Refresh again.', 409);
+        const originalDoc = documents.get(original.id);
+        let built = false;
+        try { built = fs.lstatSync(row.absolutePath).isDirectory(); } catch { /* not built yet */ }
+        const skill = { id: idFor('kept', row.name), name: row.name, sourceId: original.sourceId, relativePath: original.relativePath,
+          kept: { fromSkill: row.from.skill, fromSourceId: originalSource.id, stale: row.stale, built, description: row.description } };
+        skills.push(skill);
+        documents.set(skill.id, built
+          ? { ...skill, root: this.paths.keptDir, directory: row.absolutePath, physicalRoot: localPath(this.paths.keptDir) }
+          : { ...skill, root: originalDoc.root, directory: originalDoc.directory, physicalRoot: originalDoc.physicalRoot });
+      }
       winnerIds = view.entries.map(e => {
-        const winner = skills.find(s => s.name === e.name && documents.get(s.id).directory === e.absolutePath &&
+        if (e.kept) return idFor('kept', e.name);
+        const winner = skills.find(s => !s.kept && s.name === e.name && documents.get(s.id).directory === e.absolutePath &&
           (s.sourceId === sources[0].id ? e.source === 'vault' : sources.find(x => x.id === s.sourceId).name === e.source));
         if (!winner) throw new ReadError(ERROR.CHANGED, 'Sources changed during the merge observation. Refresh again.', 409);
         return winner.id;
       });
       // The primary vault is identified by its flag, never by the name "vault", which an old registry entry may also carry.
       const sourceIdFor = c => (c.primary ? sources[0].id : sources.find(s => s.kind !== 'primary' && s.name === c.source)?.id);
-      const skillFor = c => skills.find(s => documents.get(s.id).directory === c.absolutePath && s.sourceId === sourceIdFor(c));
-      const byName = k => (k === 'vault' ? sources[0] : sources.find(s => s.kind !== 'primary' && s.name === k));
+      const skillFor = c => skills.find(s => !s.kept && documents.get(s.id).directory === c.absolutePath && s.sourceId === sourceIdFor(c));
       // Every same-name group, with why its winner won. kind is what a person needs to do about it:
       //   identical  every copy is the same content: nothing to decide
       //   choice     you picked one, and nothing has changed since
       //   order      your source order settled it
       //   default    only the built-in order settled it: worth a look
       //   changed    you picked one, and a copy has changed (or a new one appeared) since
+      //   resolved   every distinct other copy has a kept copy of its own, so nothing is left unseen
+      const resolution = clash => {
+        const rules = view.kept.filter(k => nameKey(k.from.skill) === nameKey(clash.name));
+        const others = distinctOthers(clash.candidates, view.order);
+        return { resolved: others.length > 0 && others.every(o => rules.some(k => k.from.source === o.source)), keptNames: rules.map(k => k.name) };
+      };
       for (const clash of view.clashes) {
         const found = clash.candidates.map(c => ({ c, skill: skillFor(c) })).filter(x => x.skill);
         const winner = found.find(x => x.c.winner);
@@ -305,11 +329,18 @@ class ReadService {
           by: clash.by, stale: clash.stale,
           changedSourceIds: clash.changed.map(k => byName(k)?.id).filter(Boolean),
           identicalIds: others.filter(x => x.c.identical).map(x => x.skill.id),
+          ...resolution(clash),
         });
       }
+      keptIssues = [
+        ...view.kept.filter(k => k.stale).map(k => ({ ...k, kind: 'stale' })),
+        ...view.keptMissing.map(k => ({ ...k, kind: 'missing' })),
+        ...view.keptBlocked.map(k => ({ ...k, kind: k.reason })),
+      ].map(k => ({ name: k.name, fromSkill: k.from.skill, fromSourceId: byName(k.from.source)?.id ?? null, kind: k.kind }));
       sourceOrder = [...new Set(view.order.flatMap(k => (k === 'vault' ? sources.filter(s => s.key === 'vault') : [byName(k)]).filter(Boolean).map(s => s.id)))];
       // Can the skills the library will hold actually be invoked? Rules, listing budget, personal skills that hide them.
-      const linted = winnerIds.map(id => ({ id, ...lintSkill(documents.get(id).directory) }));
+      const keptName = new Map(skills.filter(s => s.kept).map(s => [s.id, s.name]));
+      const linted = winnerIds.map(id => ({ id, ...lintSkill(documents.get(id).directory), ...(keptName.has(id) ? { name: keptName.get(id) } : {}) }));
       // What the set editor needs about each skill in the library: its own category, and how long its description is.
       const byId = new Map(skills.map(s => [s.id, s]));
       for (const l of linted) { const sk = byId.get(l.id); if (sk) { sk.category = l.category || ''; sk.descriptionChars = (l.description || '').length; } }
@@ -367,7 +398,7 @@ class ReadService {
     });
     const catalog = { generation: randomUUID(), startedAt, completedAt: new Date().toISOString(),
       status: sources.some(s => s.state !== 'available') || rejected.length ? 'partial' : 'complete',
-      sources, skills, winnerIds, collisions, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder, sinceLastBuild, sets: storedSets, setAside,
+      sources, skills, winnerIds, collisions, keptIssues, rejected, warnings, mergeAvailable, library, projects, health, sourceOrder, sinceLastBuild, sets: storedSets, setAside,
       sourceOrderExplicit: Array.isArray(this.config.sourcePriority) && this.config.sourcePriority.length > 0 };
     this.documents = documents; this.catalog = catalog; this.stale = false;
     return catalog;

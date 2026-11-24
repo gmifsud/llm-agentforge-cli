@@ -6,6 +6,7 @@ const { discoverSkills } = require('../discovery/discover-skills');
 const { digestSkill } = require('../discovery/skill-digest');
 const { inspectDestination, removeLinkOnly, createDirectoryLink, IS_WIN } = require('../infra/fs-inspect');
 const { refused, failure } = require('../domain/errors');
+const { nameKey } = require('../domain/kept');
 
 /**
  * Compute the merged view: one link per exported skill name.
@@ -26,9 +27,16 @@ const { refused, failure } = require('../domain/errors');
  *      then the default order (vault, then registry order). `forceExternal`
  *      (the CLI's --force) puts the vault last.
  *
+ * Kept rules (`kept`) add further entries beside a clash's winner, one per rule, named by the rule and
+ * pointing at `keptDir/<name>` (generated elsewhere). Also returned:
+ *   kept         [{ name, from, description, stale, absolutePath, originalPath }]   rules that produce an entry
+ *   keptMissing  [{ name, from }]                                   the original copy is gone
+ *   keptBlocked  [{ name, from, reason: 'taken' | 'is-main' }]      the name is in use, or the original is the winner
+ * With no `keptDir` the rows are still computed, with absolutePath null, but no entries are added.
+ *
  * by: 'choice' | 'order' (an explicit sourcePriority or --force decided it) | 'default'.
  */
-function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, discover = discoverSkills, preferences = {}, sourcePriority = [], digest = (dir) => digestSkill(dir).digest }) {
+function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, discover = discoverSkills, preferences = {}, sourcePriority = [], digest = (dir) => digestSkill(dir).digest, kept = [], keptDir = null }) {
   const rejected = [];
   const groups = new Map();
   // `primary` marks the vault itself. It is tracked separately from the name because an older
@@ -66,8 +74,9 @@ function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, 
   const prefer = new Map(Object.entries(preferences || {}).map(([n, v]) => [key(n), v]));
 
   const entries = [], collisions = [], identical = [], clashes = [];
+  const winners = new Map();   // group key -> absolutePath of the copy that stands for the name
   for (const [k, group] of groups) {
-    if (group.length === 1) { entries.push({ name: group[0].name, source: group[0].source, absolutePath: group[0].absolutePath }); continue; }
+    if (group.length === 1) { winners.set(k, group[0].absolutePath); entries.push({ name: group[0].name, source: group[0].source, absolutePath: group[0].absolutePath }); continue; }
     const candidates = group.map((c) => { let d = null; try { d = digest(c.absolutePath); } catch { /* unreadable: treated as different */ } return { ...c, digest: d }; });
     const pref = prefer.get(k);
     const chosenSource = typeof pref === 'string' ? pref : pref && typeof pref === 'object' ? pref.source : undefined;
@@ -85,6 +94,7 @@ function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, 
     }
     const stale = changed.length > 0;
 
+    winners.set(k, winner.absolutePath);
     entries.push({ name: winner.name, source: winner.source, absolutePath: winner.absolutePath });
     for (const c of others) {
       const same = c.digest !== null && c.digest === winner.digest;
@@ -97,10 +107,28 @@ function computeView({ primaryRoot, repos, cacheRootFor, forceExternal = false, 
     });
   }
 
-  return { entries, collisions, identical, clashes, rejected, order };
+  const keptRows = [], keptMissing = [], keptBlocked = [];
+  const taken = new Set(groups.keys());
+  for (const rule of Array.isArray(kept) ? kept : []) {
+    const { name, from } = rule;
+    const k = key(from.skill);
+    const original = (groups.get(k) || []).find((c) => c.source === from.source);
+    if (!original) { keptMissing.push({ name, from }); continue; }
+    if (winners.get(k) === original.absolutePath) { keptBlocked.push({ name, from, reason: 'is-main' }); continue; }
+    if (taken.has(key(name))) { keptBlocked.push({ name, from, reason: 'taken' }); continue; }
+    taken.add(key(name));
+    let now = null;
+    try { now = digest(original.absolutePath); } catch { /* unreadable: treated as changed */ }
+    const stale = now === null || now !== rule.digest;
+    const absolutePath = keptDir ? path.join(keptDir, name) : null;
+    keptRows.push({ name, from, description: rule.description, stale, absolutePath, originalPath: original.absolutePath });
+    if (keptDir) entries.push({ name, source: from.source, absolutePath, kept: { from, stale } });
+  }
+
+  return { entries, collisions, identical, clashes, rejected, order, kept: keptRows, keptMissing, keptBlocked };
 }
 
-function key(name) { return IS_WIN ? name.toLowerCase() : name; }
+const key = nameKey;
 
 /**
  * Stage a complete view before replacing the live path. Restore the previous

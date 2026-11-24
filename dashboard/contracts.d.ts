@@ -14,6 +14,8 @@ export interface Skill {
   id: string; name: string; sourceId: string; relativePath: string; digest?: string | null;
   /** For skills in the library: the skill's own category, and the length of its description. What a set is built from. */
   category?: string; descriptionChars?: number;
+  /** Set on a kept copy: the skill it was kept from, its rule's description, and whether its own folder has been built yet. */
+  kept?: { fromSkill: string; fromSourceId: string; stale: boolean; built: boolean; description: string };
 }
 /** One rule of a set: select skills by name, name pattern, source or category; an exclude removes what it selects. */
 export interface SetRule { type: 'skill' | 'name' | 'source' | 'category'; value: string; exclude?: boolean }
@@ -25,7 +27,11 @@ export type ClashKind = 'identical' | 'choice' | 'order' | 'default' | 'changed'
 export interface Collision {
   name: string; winnerId: string; candidateIds: string[]; preferredSourceId: string | null;
   kind: ClashKind; by: 'choice' | 'order' | 'default'; stale: boolean; changedSourceIds: string[]; identicalIds: string[];
+  /** resolved: every distinct other copy has a kept copy. keptNames: the kept copies made from this clash. */
+  resolved: boolean; keptNames: string[];
 }
+/** A kept rule that is stale, has lost its original, or cannot take effect (taken: the name is in use; is-main: the original is the winner). */
+export interface KeptIssue { name: string; fromSkill: string; fromSourceId: string | null; kind: 'stale' | 'missing' | 'taken' | 'is-main' }
 export type AgentTool = 'claude' | 'codex' | 'gemini' | 'cursor';
 export interface LintFinding { skillId: string; skill: string; code: string; severity: 'error' | 'warn' | 'info'; tools: AgentTool[]; message: string }
 export interface ListingBudget { entries: number; withoutDescription: number; descriptionChars: number; budgetChars: number; kept: number; dropped: number; fits: boolean }
@@ -66,7 +72,7 @@ export interface ProjectReport {
 export interface LockChanges { builtAt: string; first: boolean; added: string[]; removed: string[]; changed: string[]; moved: string[] }
 export interface Catalog {
   generation: string; startedAt: string; completedAt: string; status: 'complete' | 'partial';
-  sources: Source[]; skills: Skill[]; winnerIds: string[]; collisions: Collision[];
+  sources: Source[]; skills: Skill[]; winnerIds: string[]; collisions: Collision[]; keptIssues: KeptIssue[];
   rejected: Rejection[]; warnings: string[]; mergeAvailable: boolean;
   library: LibraryState; projects: ProjectReport[];
   /** null when a source is unavailable, because the library's contents are then unknown. */
@@ -90,10 +96,13 @@ export interface SkillComparison {
 }
 export interface SkillDocument { id: string; sourceId: string; relativePath: string; text: string; readAt: string }
 
-export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire' | 'project.verify' | 'set.save' | 'set.remove' | 'skill.setaside' | 'skill.restore' | 'project.adopt';
+export type ChangeKind = 'source.attach' | 'source.detach' | 'source.fetch' | 'library.prefer' | 'library.keep' | 'library.unkeep' | 'library.rekeep' | 'library.order' | 'library.rebuild' | 'project.add' | 'project.forget' | 'project.wire' | 'project.verify' | 'set.save' | 'set.remove' | 'skill.setaside' | 'skill.restore' | 'project.adopt';
 export interface Change { kind: ChangeKind; args?: Record<string, unknown> }
 export interface ChangeLine { tone: 'add' | 'remove' | 'change' | 'note' | 'warn'; text: string }
 export interface ChangePreview { kind: ChangeKind; title: string; lines: ChangeLine[]; conflicts: string[]; ok: boolean; args?: Record<string, unknown> }
 /** uncertain: the client sent a change but did not receive its outcome; it may have applied. */
 export interface ChangeResult { kind: ChangeKind; title: string; status: 'applied' | 'refused' | 'failed' | 'skipped' | 'uncertain'; lines: ChangeLine[]; message: string }
 export interface ApplyResponse { results: ChangeResult[] }
+
+export interface Suggestion { source: string; name: string; description: string; difference: string; by: 'claude' | 'fallback' | 'cache' }
+export interface SuggestResponse { suggestions: Suggestion[] }

@@ -173,7 +173,7 @@ test('a name clash is reviewed side by side, and choosing a copy goes through th
   await expect(clashes).toContainText('1 needs a look');
   await expect(clashes).toContainText('frontend-design');
   await clashes.getByRole('link', { name: 'Compare the copies of frontend-design' }).click();
-  await expect(page.getByRole('heading', { name: 'frontend-design', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'frontend-design', exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole('article', { name: 'Your vault, in use' })).toContainText('In use: higher in the default order');
   await expect(page.getByRole('heading', { name: 'What differs' })).toBeVisible();
   await expect(page.getByRole('table').first()).toContainText('frontend-design from vault');

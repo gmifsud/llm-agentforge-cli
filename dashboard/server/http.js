@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Reader } = require('./reader');
 const { contained } = require('./read-service');
-const { API, API_HEADER, API_HEADER_VALUE, WRITE_HEADER, WRITE_ROUTES, HOST, ERROR, LIMITS, ReadError, errorDto } = require('./constants');
+const { SuggestPool, suggestTimeoutMs } = require('./suggest-service');
+const { API, API_HEADER, API_HEADER_VALUE, WRITE_HEADER, WRITE_ROUTES, SUGGEST_ROUTE, HOST, ERROR, LIMITS, ReadError, errorDto } = require('./constants');
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.ico': 'image/x-icon', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
 const CLIENT_ROUTES = new Set(['/', '/library', '/map', '/fleet', '/sets']);
@@ -19,7 +20,9 @@ function readBody(req) {
 }
 
 async function createDashboard({ options, assetRoot = path.resolve(__dirname, '../web/dist/browser'), port = 0, devOrigin, reader = new Reader(options),
-  writer = new Reader(options, { workerFile: path.join(__dirname, 'write-worker.js'), timeoutMs: LIMITS.writeMs }) } = {}) {
+  writer = new Reader(options, { workerFile: path.join(__dirname, 'write-worker.js'), timeoutMs: LIMITS.writeMs }),
+  suggesters = [0, 1].map(() => new Reader(options, { workerFile: path.join(__dirname, 'suggest-worker.js'), timeoutMs: suggestTimeoutMs() })) } = {}) {
+  const suggestions = new SuggestPool(suggesters);
   if (devOrigin && !/^http:\/\/127\.0\.0\.1:\d+$/.test(devOrigin)) throw new Error('Development origin must be a loopback HTTP origin.');
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -34,7 +37,7 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
         throw new ReadError(ERROR.BOUNDARY, 'Only this local dashboard origin is allowed.', 403);
       }
       const rawPath = (req.url || '/').split('?')[0];
-      if (req.method === 'POST' && Object.hasOwn(WRITE_ROUTES, rawPath)) {
+      if (req.method === 'POST' && (Object.hasOwn(WRITE_ROUTES, rawPath) || rawPath === SUGGEST_ROUTE)) {
         // Writes: same origin only, Origin required (browsers always send it on POST), two custom headers, JSON, bounded.
         if (req.headers.origin !== origin && !(devOrigin && req.headers.origin === devOrigin)) throw new ReadError(ERROR.BOUNDARY, 'Changes must come from this dashboard page.', 403);
         if (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin') throw new ReadError(ERROR.BOUNDARY, 'Changes must come from this dashboard page.', 403);
@@ -42,6 +45,11 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
         if (!/^application\/json(;|$)/i.test(req.headers['content-type'] || '')) throw new ReadError(ERROR.INVALID, 'Changes must be sent as JSON.', 415);
         if ((req.url || '').includes('?')) throw new ReadError(ERROR.INVALID, 'Unsupported query parameter.', 400);
         const body = await readBody(req);
+        if (rawPath === SUGGEST_ROUTE) {
+          if (!body || typeof body.skill !== 'string' || typeof body.main !== 'string' || body.skill.length > 200 || body.main.length > 64) throw new ReadError(ERROR.INVALID, 'Send the skill and its main copy.', 400);
+          json(200, await suggestions.run('suggest', [body.skill, body.main, body.fresh === true]));
+          return;
+        }
         const operation = WRITE_ROUTES[rawPath];
         const arg = operation === 'preview' ? body?.change : body?.changes;
         json(200, await writer.run(operation, [arg]));
@@ -89,7 +97,7 @@ async function createDashboard({ options, assetRoot = path.resolve(__dirname, '.
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, HOST, resolve); });
   return { server, url: `http://${HOST}:${server.address().port}`, async close() {
     const closing = new Promise(resolve => server.close(resolve));
-    server.closeAllConnections(); await reader.close(); await writer.close(); await closing;
+    server.closeAllConnections(); await reader.close(); await writer.close(); await suggestions.close(); await closing;
   } };
 }
 module.exports = { createDashboard };

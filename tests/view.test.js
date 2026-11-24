@@ -189,3 +189,94 @@ test('materializeView refuses a view containing a non-link entry (user data in t
   assert.throws(() => materializeView(view, [{ name: 'a', absolutePath: path.join(v1, 'a') }]), { code: 'VIEW_SHAPE' });
   assert.ok(fs.existsSync(path.join(view, 'real-dir', 'keep.txt')));
 });
+
+// A vault and a source both ship `brainstorming` (different content); the vault is pinned, so r1's copy is a candidate for keeping.
+function keptFixture(t, { r1Skill = 'brainstorming', r1Extra = [], pinned = 'vault', rule = {} } = {}) {
+  const { digestSkill } = require('../src/discovery/skill-digest');
+  const root = tempRoot(t);
+  const vault = makeVault(root, 'vault', ['brainstorming']);
+  const r1 = makeVault(root, 'r1', [r1Skill, ...r1Extra]);
+  const repos = [{ name: 'r1', type: 'local', url_or_path: r1 }];
+  const keptDir = path.join(root, 'kept');
+  const original = path.join(r1, r1Skill);
+  const kept = [{ name: 'brainstorming-r1', from: { skill: 'brainstorming', source: 'r1' }, description: 'kept copy', digest: digestSkill(original).digest, keptAt: 'now', ...rule }];
+  const args = { primaryRoot: vault, repos, cacheRootFor: () => '', preferences: { brainstorming: pinned }, kept, keptDir };
+  return { root, vault, r1, original, keptDir, args };
+}
+
+test('kept rules become library entries beside the winner', (t) => {
+  const f = keptFixture(t);
+  const v = computeView(f.args);
+  assert.deepEqual(v.entries.map((e) => e.name), ['brainstorming', 'brainstorming-r1']);
+  const e = v.entries[1];
+  assert.equal(e.source, 'r1');
+  assert.equal(e.absolutePath, path.join(f.keptDir, 'brainstorming-r1'));
+  assert.deepEqual(e.kept, { from: { skill: 'brainstorming', source: 'r1' }, stale: false });
+  assert.deepEqual(v.kept, [{ name: 'brainstorming-r1', from: { skill: 'brainstorming', source: 'r1' }, description: 'kept copy', stale: false, absolutePath: path.join(f.keptDir, 'brainstorming-r1'), originalPath: f.original }]);
+  assert.deepEqual(v.keptMissing, []);
+  assert.deepEqual(v.keptBlocked, []);
+});
+
+test('a kept rule is stale once its original changes', (t) => {
+  const f = keptFixture(t);
+  fs.appendFileSync(path.join(f.original, 'SKILL.md'), 'edited upstream\n');
+  const v = computeView(f.args);
+  assert.equal(v.kept[0].stale, true);
+  assert.equal(v.entries[1].kept.stale, true);
+});
+
+test('a kept rule whose original has gone is reported missing, makes no entry, and does not throw', (t) => {
+  const f = keptFixture(t);
+  fs.rmSync(f.original, { recursive: true });
+  const v = computeView(f.args);
+  assert.deepEqual(v.keptMissing, [{ name: 'brainstorming-r1', from: { skill: 'brainstorming', source: 'r1' } }]);
+  assert.deepEqual(v.entries.map((e) => e.name), ['brainstorming']);
+  assert.deepEqual(v.kept, []);
+});
+
+test('a kept rule whose name a source skill already holds is blocked as taken', (t) => {
+  const f = keptFixture(t, { r1Extra: ['brainstorming-r1'] });
+  const v = computeView(f.args);
+  assert.deepEqual(v.keptBlocked, [{ name: 'brainstorming-r1', from: { skill: 'brainstorming', source: 'r1' }, reason: 'taken' }]);
+  assert.equal(v.entries.find((e) => e.name === 'brainstorming-r1').source, 'r1');
+  assert.equal(v.entries.find((e) => e.name === 'brainstorming-r1').kept, undefined);
+  assert.deepEqual(v.kept, []);
+});
+
+test('two rules with one name: the first is accepted, the second is blocked as taken', (t) => {
+  const f = keptFixture(t);
+  f.args.kept = [f.args.kept[0], { ...f.args.kept[0] }];
+  const v = computeView(f.args);
+  assert.equal(v.kept.length, 1);
+  assert.equal(v.keptBlocked[0].reason, 'taken');
+});
+
+test('a kept rule whose original is the winner is blocked as is-main', (t) => {
+  const f = keptFixture(t, { pinned: 'r1' });
+  const v = computeView(f.args);
+  assert.deepEqual(v.keptBlocked, [{ name: 'brainstorming-r1', from: { skill: 'brainstorming', source: 'r1' }, reason: 'is-main' }]);
+  assert.deepEqual(v.entries.map((e) => e.name), ['brainstorming']);
+});
+
+test('a kept rule whose original is now the only copy is blocked as is-main', (t) => {
+  const f = keptFixture(t);
+  fs.rmSync(path.join(f.vault, 'brainstorming'), { recursive: true });
+  const v = computeView(f.args);
+  assert.equal(v.keptBlocked[0].reason, 'is-main');
+});
+
+test('without a keptDir, kept rows are computed but no entries are added', (t) => {
+  const f = keptFixture(t);
+  const v = computeView({ ...f.args, keptDir: null });
+  assert.equal(v.kept[0].absolutePath, null);
+  assert.deepEqual(v.entries.map((e) => e.name), ['brainstorming']);
+});
+
+test('a kept rule matches its original case-insensitively on Windows', (t) => {
+  if (process.platform !== 'win32') return t.skip('name matching is case-sensitive off Windows');
+  const f = keptFixture(t, { r1Skill: 'Brainstorming' });   // the rule says "brainstorming"; the source spells it "Brainstorming"
+  const v = computeView(f.args);
+  assert.equal(v.kept.length, 1);
+  assert.equal(v.kept[0].stale, false);
+  assert.deepEqual(v.keptMissing, []);
+});

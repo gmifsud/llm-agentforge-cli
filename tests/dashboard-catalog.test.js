@@ -11,6 +11,8 @@ const { addSource } = require('../src/application/sources');
 const { createPaths } = require('../src/infra/paths');
 const { fixture } = require('./dashboard-fixtures');
 const { makeVault, mkLink } = require('./helpers');
+const { syncView } = require('../src/application/sync');
+const { digestSkill } = require('../src/discovery/skill-digest');
 
 // The fixture: vault has frontend-design + sql-review; the "frontend-lab" source has frontend-design + browser-testing.
 const config = (f, extra) => fs.writeFileSync(path.join(f.homedir, '.agentforge', 'config.json'), JSON.stringify({ vaultRoot: f.vault, ...extra }));
@@ -145,4 +147,54 @@ test('"vault" is reserved: a new source cannot take the primary vault\'s name', 
   const paths = createPaths({ homedir: f.homedir, scriptDir: f.root });
   assert.throws(() => addSource({ paths, urlOrPath: other, name: 'vault' }), { exitCode: 2 });
   assert.throws(() => addSource({ paths, urlOrPath: other, name: 'Vault' }), { exitCode: 2 });
+});
+
+test('a kept copy is a skill in the catalogue, built or not, and resolves its clash', t => {
+  const f = fixture(t);
+  const original = path.join(f.source, 'frontend-design');
+  const rule = { name: 'frontend-design-lab', from: { skill: 'frontend-design', source: 'frontend-lab' }, description: 'The lab copy.', digest: digestSkill(original).digest, keptAt: 'now' };
+  config(f, { kept: [rule] });
+  const read = () => new ReadService(f.options);
+  const keptSkill = c => c.skills.find(s => s.name === 'frontend-design-lab');
+
+  let c = read().refresh();
+  const lab = c.sources.find(s => s.key === 'frontend-lab');
+  assert.equal(keptSkill(c).sourceId, lab.id);
+  assert.deepEqual(keptSkill(c).kept, { fromSkill: 'frontend-design', fromSourceId: lab.id, stale: false, built: false, description: 'The lab copy.' });
+  assert.ok(c.winnerIds.includes(keptSkill(c).id));
+  const unbuilt = read(), uc = unbuilt.refresh();
+  assert.match(unbuilt.document(keptSkill(uc).id, uc.generation).text, /^name: frontend-design$/m, 'before a rebuild it reads the original');
+  assert.equal(clash(c).resolved, true);
+  assert.deepEqual(clash(c).keptNames, ['frontend-design-lab']);
+  assert.deepEqual(c.keptIssues, []);
+  assert.ok(c.health.budget.entries >= 4, 'the listing budget counts the kept copy');
+
+  syncView({ paths: createPaths({ homedir: f.homedir, scriptDir: path.resolve(__dirname, '..') }), env: {}, fetch: false, git: {} });
+  const service = read();
+  c = service.refresh();
+  assert.equal(keptSkill(c).kept.built, true);
+  assert.match(service.document(keptSkill(c).id, c.generation).text, /^name: frontend-design-lab$/m);
+  assert.equal(c.health.findings.filter(x => x.skill === 'frontend-design-lab').length, 0);
+});
+
+test('kept rules that cannot apply are reported as issues, and an unresolved clash says so', t => {
+  const f = fixture(t);
+  const original = path.join(f.source, 'frontend-design');
+  const digest = digestSkill(original).digest;
+  config(f, { kept: [
+    { name: 'frontend-design-old', from: { skill: 'frontend-design', source: 'frontend-lab' }, description: 'd', digest: 'stale-digest', keptAt: 'now' },
+    { name: 'frontend-design-gone', from: { skill: 'frontend-design', source: 'ghost' }, description: 'd', digest, keptAt: 'now' },
+    { name: 'frontend-design-lab', from: { skill: 'frontend-design', source: 'vault' }, description: 'd', digest, keptAt: 'now' },
+  ] });
+  const c = new ReadService(f.options).refresh();
+  const issues = c.keptIssues.map(i => `${i.name}:${i.kind}:${i.fromSourceId === null ? 'null' : 'id'}`).sort();
+  assert.deepEqual(issues, ['frontend-design-gone:missing:null', 'frontend-design-lab:is-main:id', 'frontend-design-old:stale:id']);
+  assert.equal(clash(c).resolved, true);
+  assert.deepEqual(clash(c).keptNames, ['frontend-design-old']);
+});
+
+test('a clash with no kept rule is not resolved', t => {
+  const f = fixture(t);
+  const c = new ReadService(f.options).refresh();
+  assert.deepEqual([clash(c).resolved, clash(c).keptNames, c.keptIssues], [false, [], []]);
 });

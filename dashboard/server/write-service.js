@@ -11,7 +11,9 @@ const path = require('node:path');
 const { createPaths, loadConfig, loadRegistry, resolvePrimarySource } = require('../../src/infra/paths');
 const { validateSourceId, deriveSourceId, isGitUrl } = require('../../src/domain/source-id');
 const { TARGETS } = require('../../src/domain/targets');
-const { AgentforgeError } = require('../../src/domain/errors');
+const { AgentforgeError, refused } = require('../../src/domain/errors');
+const { checkKeptName, checkDescription, normaliseDescription, distinctOthers, validateKept } = require('../../src/domain/kept');
+const { inspectLibrary } = require('../../src/application/health');
 const { addSource, removeSource, fetchSources, cacheRootFor, sourceRootFor } = require('../../src/application/sources');
 const { syncView } = require('../../src/application/sync');
 const { readLock, revisionLookup, snapshot, diffLock } = require('../../src/application/lock');
@@ -34,7 +36,7 @@ const { createHash } = require('node:crypto');
 const idFor = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex');
 /** Steps whose failure never cancels the others: updating one source, or asking one tool. */
 const INDEPENDENT = new Set(['source.fetch', 'project.verify']);
-const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove', 'skill.setaside', 'skill.restore', 'project.adopt'];
+const KINDS = ['source.attach', 'source.detach', 'source.fetch', 'library.prefer', 'library.keep', 'library.unkeep', 'library.rekeep', 'library.order', 'library.rebuild', 'project.add', 'project.forget', 'project.wire', 'project.verify', 'set.save', 'set.remove', 'skill.setaside', 'skill.restore', 'project.adopt'];
 const LINK_TYPES = ['auto', 'junction', 'symlink', 'copy'];
 const list = (names, max = 6) => names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} and ${names.length - max} more`;
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -73,10 +75,12 @@ class WriteService {
     localPath(p.path);
     return p;
   }
-  view(config = this.config()) {
-    const repos = this.registry();
-    return computeView({ primaryRoot: this.primary(config), repos, cacheRootFor: r => cacheRootFor(this.paths, r), preferences: config.preferences || {}, sourcePriority: config.sourcePriority });
+  /** The view as agentforge builds it, kept rules included. `over` replaces any computeView input. */
+  viewFor(config, over = {}) {
+    return computeView({ primaryRoot: this.primary(config), repos: this.registry(), cacheRootFor: r => cacheRootFor(this.paths, r), preferences: {}, sourcePriority: config.sourcePriority,
+      kept: config.kept || [], keptDir: this.paths.keptDir, ...over });
   }
+  view(config = this.config()) { return this.viewFor(config, { preferences: config.preferences || {} }); }
 
   /** Validate the change shape, then dispatch. */
   describe(change) {
@@ -161,8 +165,16 @@ class WriteService {
     else lines.push({ tone: 'remove', text: `Delete the downloaded copy in ${cacheRootFor(this.paths, repo)}` });
     const root = sourceRootFor(this.paths, repo);
     if (fs.existsSync(root)) {
-      const leaving = this.view().entries.filter(e => e.source === name).map(e => e.name);
+      // What leaves is what the library holds now and would not hold without this source: a name another copy
+      // takes stays, and a kept copy whose rule stops working (its original becomes the main copy) leaves.
+      const config = this.config();
+      const now = this.view(config).entries;
+      const without = new Set(this.viewFor(config, { preferences: config.preferences || {}, repos: this.registry().filter(r => r.name !== name) }).entries.map(e => nameKey(e.name)));
+      const gone = now.filter(e => !without.has(nameKey(e.name)));
+      const leaving = gone.filter(e => !e.kept).map(e => e.name);
       if (leaving.length) lines.push({ tone: 'warn', text: `${plural(leaving.length, 'skill')} leave the library when it is rebuilt: ${list(leaving)}` });
+      const label = s => (s === 'vault' ? 'your vault' : s);
+      for (const e of gone.filter(x => x.kept)) lines.push({ tone: 'remove', text: `The kept copy ${e.name} (${label(e.kept.from.source)}'s ${e.kept.from.skill}) leaves the library at the next rebuild` });
     }
     return { title: `Detach ${name}`, lines, conflicts: [], ok: true, args: { name },
       run: () => { removeSource({ paths: this.paths, name }); } };
@@ -191,8 +203,9 @@ class WriteService {
     const skill = str(args.skill, 'Skill', { max: 200 });
     const source = str(args.source, 'Source', { optional: true, max: 64 });
     const config = this.config();
-    const clashOf = () => computeView({ primaryRoot: this.primary(config), repos: this.registry(), cacheRootFor: r => cacheRootFor(this.paths, r), preferences: {}, sourcePriority: config.sourcePriority })
-      .clashes.find(c => nameKey(c.name) === nameKey(skill));
+    const clashOf = () => this.viewFor(config).clashes.find(c => nameKey(c.name) === nameKey(skill));
+    const isThis = r => nameKey(r.from.skill) === nameKey(skill);
+    const dropped = (config.kept || []).filter(isThis);
     const clash = clashOf();
     if (!clash) throw bad(`Only one source provides "${skill}", so there is nothing to choose.`);
     if (source && !clash.candidates.some(c => c.source === source)) throw bad(`"${source}" does not provide "${skill}".`);
@@ -201,6 +214,8 @@ class WriteService {
       ? { tone: 'change', text: `Use the ${skill} from ${label(source)} in the library` }
       : { tone: 'change', text: `Go back to the source order for ${skill} (${label(clash.winner)} wins)` }];
     if (source) lines.push({ tone: 'note', text: 'Your choice is tied to the current content of each copy. If one of them changes later, you will be asked to look again.' });
+    // Choosing one copy is the explicit way to let the others go, so each kept copy leaving the library is named.
+    for (const r of dropped) lines.push({ tone: 'remove', text: `The kept copy ${r.name} (${label(r.from.source)}'s ${skill}) leaves the library at the next rebuild` });
     lines.push({ tone: 'note', text: 'Saved in ~/.agentforge/config.json. The command line uses the same choice.' });
     return { title: `Choose ${skill}`, lines, conflicts: [], ok: true, args: { skill, source },
       run: () => {
@@ -212,6 +227,177 @@ class WriteService {
         if (source) prefs[skill] = { source, digests: Object.fromEntries((now ? now.candidates : []).map(c => [c.source, c.digest])), chosenAt: new Date().toISOString() };
         const next = { ...fresh, preferences: prefs };
         if (!Object.keys(prefs).length) delete next.preferences;
+        const rules = (fresh.kept || []).filter(r => !isThis(r));
+        if (rules.length) next.kept = rules; else delete next.kept;
+        saveConfig(this.paths, next);
+      } };
+  }
+
+  /**
+   * Keep every distinct copy of a clash: `main` keeps the plain name (pinned as a choice) and each other distinct
+   * content gets a kept copy under its own name. Replaces every rule this clash already has.
+   */
+  library_keep(args) {
+    const skill = str(args.skill, 'Skill', { max: 200 });
+    const main = str(args.main, 'Main copy', { max: 64 });
+    if (!Array.isArray(args.keep) || args.keep.length > 50) throw bad('Send the copies to keep.');
+    const text = (v, max) => (typeof v === 'string' && v.length <= max && !v.includes('\0') ? v.trim() : '');
+    const entries = args.keep.map(k => {
+      if (!k || typeof k !== 'object') throw bad('Each kept copy needs a source, a name and a description.');
+      return { source: str(k.source, 'Source', { max: 64 }), name: text(k.name, 200), description: normaliseDescription(text(k.description, 5000)) };
+    });
+    const config = this.config();
+    const isThis = r => nameKey(r.from.skill) === nameKey(skill);
+    const others = (config.kept || []).filter(r => !isThis(r));
+    const view = this.viewFor(config, { kept: others });
+    const clash = view.clashes.find(c => nameKey(c.name) === nameKey(skill));
+    if (!clash) throw bad(`Only one source provides "${skill}", so there is nothing to keep.`);
+    const plain = clash.name;
+    if (!clash.candidates.some(c => c.source === main)) throw bad(`"${main}" does not provide "${plain}".`);
+    const owner = s => (s === 'vault' ? "Your vault's" : `${s}'s`);
+    const current = Object.fromEntries(clash.candidates.map(c => [c.source, c.digest]));
+    const conflicts = [], lines = [];
+
+    // The caller may carry the digests it looked at; a copy that no longer matches means the preview is out of date.
+    if (args.digests && typeof args.digests === 'object') {
+      for (const c of clash.candidates) if (args.digests[c.source] !== c.digest) conflicts.push(`${owner(c.source)} ${plain} changed since you looked. Look at the clash again.`);
+    }
+
+    // Every distinct content other than the main's needs exactly one entry, named for its highest-ranked holder.
+    const rows = distinctOthers(clash.candidates.map(c => ({ source: c.source, digest: c.digest, winner: c.source === main })), view.order);
+    const rowOf = new Map(), twinOf = new Map();
+    for (const row of rows) { rowOf.set(row.source, row); for (const s of row.also) twinOf.set(s, row); }
+    const seen = new Set();
+    for (const e of entries) {
+      if (seen.has(e.source)) conflicts.push(`${owner(e.source)} copy is listed twice.`);
+      seen.add(e.source);
+      if (!clash.candidates.some(c => c.source === e.source)) conflicts.push(`"${e.source}" does not provide "${plain}".`);
+      else if (e.source === main) conflicts.push(`${owner(main)} copy is the main one. It keeps the plain name and needs no kept copy.`);
+      else if (twinOf.has(e.source)) conflicts.push(`${owner(e.source)} ${plain} is the same as ${twinOf.get(e.source).source}'s. Use ${twinOf.get(e.source).source} for that copy.`);
+      else if (!rowOf.has(e.source)) conflicts.push(`${owner(e.source)} ${plain} is the same as the main copy. It needs no kept copy.`);
+    }
+    for (const row of rows) {
+      if (row.digest === null) conflicts.push(`${owner(row.source)} ${plain} cannot be read, so it cannot be kept.`);
+      if (!entries.some(e => e.source === row.source)) conflicts.push(`${owner(row.source)} ${plain} differs from the main copy and needs a kept name.`);
+    }
+
+    const taken = new Set([...view.entries.map(e => nameKey(e.name)), ...others.map(r => nameKey(r.name))]);
+    for (const e of entries) {
+      const nameProblem = checkKeptName(e.name, plain, taken);
+      if (nameProblem) conflicts.push(`${e.name || 'A kept copy'}: ${nameProblem}.`);
+      taken.add(nameKey(e.name));
+      const descriptionProblem = checkDescription(e.description);
+      if (descriptionProblem) conflicts.push(`The description of ${e.name || `${owner(e.source)} copy`} ${descriptionProblem}.`);
+    }
+    const rulesAt = at => rows.map(row => {
+      const e = entries.find(x => x.source === row.source);
+      return { name: e.name, from: { skill: plain, source: row.source }, description: e.description, digest: row.digest, keptAt: at };
+    });
+    if (!conflicts.length) {
+      try { validateKept([...others, ...rulesAt(new Date().toISOString())], this.paths.configJson); } catch (e) { conflicts.push(message(e)); }
+    }
+
+    if (!conflicts.length) {
+      lines.push({ tone: 'change', text: `${owner(main)} \`${plain}\` keeps the name \`${plain}\`.` });
+      for (const row of rows) {
+        const e = entries.find(x => x.source === row.source);
+        lines.push({ tone: 'add', text: row.also.length
+          ? `${[row.source, ...row.also].join(' and ')} are the same; kept once as \`${e.name}\`.`
+          : `${owner(row.source)} \`${plain}\` is kept as \`${e.name}\`.` });
+      }
+      // Rules this clash already has are all replaced; name each one that does not come back as it was.
+      const existing = (config.kept || []).filter(isThis);
+      for (const r of existing) {
+        const same = rows.some(row => row.source === r.from.source && entries.find(x => x.source === row.source)?.name === r.name);
+        if (same) continue;
+        lines.push({ tone: 'remove', text: r.from.source === main
+          ? `The kept copy ${r.name} leaves the library; its content now has the plain name ${plain}`
+          : `The kept copy ${r.name} leaves the library at the next rebuild` });
+      }
+      const net = rows.length - existing.length;
+      if (net !== 0) lines.push({ tone: 'note', text: `Agents will see ${plural(Math.abs(net), net > 0 ? 'more skill' : 'fewer skill', net > 0 ? 'more skills' : 'fewer skills')} once the library is rebuilt. Nothing in any source changes.` });
+      if (!inspectLibrary({ root: this.paths.mergedSkills, config }).budget.fits) lines.push({ tone: 'warn', text: 'The listing is already over its budget; one more description makes that slightly worse.' });
+      lines.push({ tone: 'note', text: 'Saved in ~/.agentforge/config.json. The command line uses the same rules.' });
+    }
+    return { title: `Keep every copy of ${plain}`, lines, conflicts, ok: conflicts.length === 0, args: { skill: plain, main, keep: entries, digests: current },
+      run: () => {
+        const fresh = this.config();
+        const now = this.viewFor(fresh, { kept: [] }).clashes.find(c => nameKey(c.name) === nameKey(plain));
+        const same = now && now.candidates.length === Object.keys(current).length && now.candidates.every(c => current[c.source] === c.digest);
+        if (!same) throw refused('KEPT_CHANGED', `${plain} changed since you looked. Look at the clash again.`);
+        const prefs = { ...(fresh.preferences || {}) };
+        for (const k of Object.keys(prefs)) if (nameKey(k) === nameKey(plain)) delete prefs[k];
+        const at = new Date().toISOString();
+        prefs[plain] = { source: main, digests: current, chosenAt: at };
+        const kept = [...(fresh.kept || []).filter(r => !isThis(r)), ...rulesAt(at)];
+        try { validateKept(kept, this.paths.configJson); } catch (e) { throw refused('CONFIG_INVALID', message(e)); }
+        saveConfig(this.paths, { ...fresh, preferences: prefs, kept });
+      } };
+  }
+
+  /** Stop keeping one copy. The original stays wherever it is; only the renamed copy leaves the library. */
+  library_unkeep(args) {
+    const name = str(args.name, 'Kept copy', { max: 200 });
+    const rule = (this.config().kept || []).find(r => nameKey(r.name) === nameKey(name));
+    if (!rule) throw new ReadError(ERROR.NOT_FOUND, `No kept copy called "${name}".`, 404);
+    const label = s => (s === 'vault' ? 'your vault' : s);
+    const lines = [
+      { tone: 'remove', text: `Remove the kept copy ${rule.name} (${label(rule.from.source)}'s ${rule.from.skill}). Agents lose that copy after the rebuild.` },
+      { tone: 'note', text: 'The original skill is not touched.' },
+    ];
+    return { title: `Stop keeping ${rule.name}`, lines, conflicts: [], ok: true, args: { name: rule.name },
+      run: () => {
+        const fresh = this.config();
+        const kept = (fresh.kept || []).filter(r => nameKey(r.name) !== nameKey(rule.name));
+        const next = { ...fresh };
+        if (kept.length) next.kept = kept; else delete next.kept;
+        saveConfig(this.paths, next);
+      } };
+  }
+
+  /**
+   * Accept that a kept copy's original changed: re-pin the rule to the original as it is now, optionally with a new
+   * description, and re-pin the clash's own choice too, so one change to an original leaves one row to look at.
+   */
+  library_rekeep(args) {
+    const name = str(args.name, 'Kept copy', { max: 200 });
+    const hasDescription = typeof args.description === 'string';
+    const description = hasDescription ? normaliseDescription(args.description) : null;
+    const config = this.config();
+    const rule = (config.kept || []).find(r => nameKey(r.name) === nameKey(name));
+    if (!rule) throw new ReadError(ERROR.NOT_FOUND, `No kept copy called "${name}".`, 404);
+    const label = s => (s === 'vault' ? 'your vault' : s);
+    const clashOf = cfg => this.viewFor(cfg, { preferences: cfg.preferences || {} }).clashes.find(c => nameKey(c.name) === nameKey(rule.from.skill));
+    const conflicts = [];
+    const original = clashOf(config)?.candidates.find(c => c.source === rule.from.source);
+    if (!original) conflicts.push('The original is gone; remove the copy instead.');
+    else if (original.digest === null) conflicts.push(`${label(rule.from.source)}'s ${rule.from.skill} cannot be read, so it cannot be re-pinned.`);
+    if (hasDescription) {
+      const problem = checkDescription(description);
+      if (problem) conflicts.push(`The description of ${rule.name} ${problem}.`);
+    }
+    const lines = conflicts.length ? [] : [
+      { tone: 'change', text: `${rule.name} now follows ${label(rule.from.source)}'s ${rule.from.skill} as it is today.` },
+      hasDescription ? { tone: 'change', text: 'The description is replaced.' } : { tone: 'note', text: 'The description stays as it is.' },
+      { tone: 'note', text: 'Saved in ~/.agentforge/config.json. The copy is rebuilt with the next library rebuild.' },
+    ];
+    return { title: `Keep ${rule.name} as it is`, lines, conflicts, ok: conflicts.length === 0, args: { name: rule.name, ...(hasDescription ? { description } : {}), ...(original?.digest ? { digest: original.digest } : {}) },
+      run: () => {
+        const fresh = this.config();
+        const current = (fresh.kept || []).find(r => nameKey(r.name) === nameKey(rule.name));
+        if (!current) throw refused('KEPT_CHANGED', `${rule.name} is no longer kept. Look again.`);
+        const clash = clashOf(fresh);
+        const now = clash?.candidates.find(c => c.source === current.from.source);
+        if (!now || now.digest === null) throw refused('KEPT_CHANGED', 'The original is gone; remove the copy instead.');
+        if (typeof args.digest === 'string' && args.digest !== now.digest) throw refused('KEPT_CHANGED', `${rule.from.skill} changed since you looked. Look at it again.`);
+        const kept = (fresh.kept || []).map(r => (r === current ? { ...r, digest: now.digest, ...(hasDescription ? { description } : {}) } : r));
+        const next = { ...fresh, kept };
+        const prefs = fresh.preferences || {};
+        const prefKey = Object.keys(prefs).find(k => nameKey(k) === nameKey(rule.from.skill));
+        if (prefKey && prefs[prefKey] && typeof prefs[prefKey] === 'object' && prefs[prefKey].digests) {
+          next.preferences = { ...prefs, [prefKey]: { ...prefs[prefKey], digests: Object.fromEntries(clash.candidates.map(c => [c.source, c.digest])) } };
+        }
+        try { validateKept(kept, this.paths.configJson); } catch (e) { throw refused('CONFIG_INVALID', message(e)); }
         saveConfig(this.paths, next);
       } };
   }
@@ -227,7 +413,7 @@ class WriteService {
     if (unknown.length) throw bad(`Not an attached source: ${list(unknown)}.`);
     if (new Set(order).size !== order.length) throw bad('A source appears twice in the order.');
     const label = s => (s === 'vault' ? 'your vault' : s);
-    const viewWith = sourcePriority => computeView({ primaryRoot: this.primary(config), repos, cacheRootFor: r => cacheRootFor(this.paths, r), preferences: config.preferences || {}, sourcePriority });
+    const viewWith = sourcePriority => this.viewFor(config, { repos, preferences: config.preferences || {}, sourcePriority });
     const before = new Map(viewWith(config.sourcePriority).entries.map(e => [nameKey(e.name), e.source]));
     const after = viewWith(order);
     const flips = after.entries.filter(e => before.has(nameKey(e.name)) && before.get(nameKey(e.name)) !== e.source);
@@ -269,7 +455,9 @@ class WriteService {
     return { title: 'Rebuild the library', lines, conflicts, ok: conflicts.length === 0, args: {},
       run: () => {
         const res = syncView({ paths: this.paths, env: this.env, cliVault: this.vault, fetch: false, git: this.git });
-        return { lines: [{ tone: 'add', text: `Library rebuilt with ${plural(res.linked, 'skill')}` }] };
+        const out = [{ tone: 'add', text: `Library rebuilt with ${plural(res.linked, 'skill')}` }];
+        if (res.kept.leftover) out.push({ tone: 'warn', text: `The previous kept copies at ${res.kept.leftover} could not be removed. Delete that folder before the next rebuild.` });
+        return { lines: out };
       } };
   }
 
