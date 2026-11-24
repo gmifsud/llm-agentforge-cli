@@ -148,12 +148,15 @@ State lives in `~/.agentforge/`:
 Vault root for `init` / `link` / `doctor`:
 
 1. `--vault` / `-VaultRoot`
-2. `$env:AGENTFORGE_VAULT_ROOT`
-3. `config.json` → `vaultRoot`
-4. `~/.agentforge/merged-skills/` — only if `repos.json` exists beside it (an orphaned view is ignored with a warning)
-5. `~/.agentforge/vault`, with a warning that no vault is configured
+2. `~/.agentforge/merged-skills/` when it is built **and at least one source is registered**. Projects then get every registered source's skills; `$env:AGENTFORGE_VAULT_ROOT` and `vaultRoot` still name your primary vault for `repo sync`, and the command says so when one of them is set. Pass `--vault` to wire the vault alone.
+3. `$env:AGENTFORGE_VAULT_ROOT`
+4. `config.json` → `vaultRoot`
+5. `~/.agentforge/merged-skills/` — only if `repos.json` exists beside it, with no sources in it (an orphaned view is ignored with a warning)
+6. `~/.agentforge/vault`, with a warning that no vault is configured
 
-Primary source for `repo sync` uses the same chain minus step 4; the view itself is refused as a source.
+A corrupt `repos.json` stops `init`, `link` and `doctor` unless you pass `--vault`, as it stops `repo sync`. Sources registered but no library built yet gives a warning to run `repo sync`.
+
+Primary source for `repo sync` is `--vault`, then `$env:AGENTFORGE_VAULT_ROOT`, then `vaultRoot`, then the default; the view itself is refused as a source.
 
 Link type: `--link junction|symlink|copy|none|auto` (default `auto` → junction on Windows, symlink elsewhere). `none` returns before inspecting anything and never mutates.
 

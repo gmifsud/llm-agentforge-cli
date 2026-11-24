@@ -144,6 +144,60 @@ test('repo add/list/sync --no-fetch builds the view; doctor then uses it; remove
   assert.ok(fs.existsSync(path.join(ext, 'extra', 'SKILL.md')), 'local source untouched');
 });
 
+test('with AGENTFORGE_VAULT_ROOT set, init and link wire the library when sources are registered; --vault still wins', (t) => {
+  const root = tempRoot(t);
+  const home = path.join(root, 'home'); fs.mkdirSync(home);
+  const vault = makeVault(root, 'vault', ['own']);
+  const ext = makeVault(root, 'ext', ['extra']);
+  const env = { AGENTFORGE_VAULT_ROOT: vault };
+  assert.equal(cli(['repo', 'add', ext, '--name', 'ext'], { home, env }).code, 0);
+  assert.equal(cli(['repo', 'sync', '--no-fetch'], { home, env }).code, 0);
+  const view = path.join(home, '.agentforge', 'merged-skills');
+
+  const fresh = path.join(root, 'fresh'); fs.mkdirSync(fresh);
+  const init = cli(['init', '--path', fresh], { home, env });
+  assert.equal(init.code, 0, init.err);
+  assert.match(init.out, /merged-skills \(merged-view\)/);
+  assert.match(init.out, /AGENTFORGE_VAULT_ROOT .*primary vault for "repo sync".*--vault/);
+  assert.deepEqual(fs.readdirSync(path.join(fresh, '.claude', 'skills')).sort(), ['extra', 'own'], 'the registered source reaches the project');
+  assert.equal(fs.realpathSync(path.join(fresh, '.claude', 'skills')), fs.realpathSync(view));
+
+  const alone = path.join(root, 'alone'); fs.mkdirSync(alone);
+  const explicit = cli(['init', '--path', alone, '--vault', vault], { home, env });
+  assert.equal(explicit.code, 0, explicit.err);
+  assert.deepEqual(fs.readdirSync(path.join(alone, '.claude', 'skills')), ['own'], '--vault wires the vault alone');
+  assert.doesNotMatch(explicit.out, /primary vault for "repo sync"/);
+
+  // A project already wired to the vault is not repointed behind the owner's back.
+  const before = snapshot(alone);
+  const link = cli(['link', '--path', alone], { home, env });
+  assert.equal(link.code, 3, link.err);
+  assert.match(link.err, /--force/);
+  assert.deepEqual(snapshot(alone), before);
+});
+
+test('link refuses a --path that is not an existing folder, and init refuses one that is a file; neither creates anything', (t) => {
+  const root = tempRoot(t);
+  const home = path.join(root, 'home'); fs.mkdirSync(home);
+  const vault = makeVault(root, 'vault', ['a']);
+  const project = path.join(root, 'proj'); fs.mkdirSync(project);
+  fs.writeFileSync(path.join(root, 'a-file'), 'x');
+  const before = snapshot(root);
+
+  // A relative path is resolved against the folder the command runs from, so this one is proj/proj, which does not exist.
+  const nested = cli(['link', '--path', 'proj', '--vault', vault], { home, cwd: project });
+  assert.equal(nested.code, 2, nested.out + nested.err);
+  assert.match(nested.err, /not an existing folder/);
+  assert.match(nested.err, /proj[\\/]proj/);
+  assert.equal(cli(['link', '--path', path.join(root, 'nope'), '--vault', vault, '--dry-run'], { home }).code, 2, 'also on a dry run');
+  for (const command of ['link', 'init']) assert.equal(cli([command, '--path', path.join(root, 'a-file'), '--vault', vault], { home }).code, 2, `${command} on a file`);
+  assert.deepEqual(snapshot(root), before, 'nothing was created');
+
+  assert.equal(cli(['link', '--path', '.', '--vault', vault], { home, cwd: project }).code, 0, 'an existing folder still works');
+  const fresh = cli(['init', '--path', path.join(root, 'new-project'), '--vault', vault], { home });
+  assert.equal(fresh.code, 0, 'init may still start a project in a folder that does not exist yet');
+});
+
 test('repo sync --no-fetch builds kept copies and says so; with no rules it stays quiet about them', (t) => {
   const root = tempRoot(t);
   const home = path.join(root, 'home'); fs.mkdirSync(path.join(home, '.agentforge'), { recursive: true });

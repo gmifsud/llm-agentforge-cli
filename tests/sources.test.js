@@ -99,6 +99,59 @@ test('deploy root: an orphaned merged view (no repos.json) is ignored with a war
   assert.equal(resolveDeployRoot({ env: {}, paths, config: { vaultRoot: 'K' } }).origin, 'config');
 });
 
+/** A home with a built merged view and `count` registered sources. */
+function homeWithLibrary(t, count) {
+  const home = fakeHome(t);
+  const { paths } = home;
+  fs.mkdirSync(paths.mergedSkills, { recursive: true });
+  const repositories = Array.from({ length: count }, (_, i) => ({ name: `src${i}`, type: 'local', url_or_path: `/s${i}` }));
+  fs.writeFileSync(paths.reposJson, JSON.stringify({ repositories }));
+  return home;
+}
+
+test('deploy root: a built library with registered sources beats the env var and config vaultRoot', (t) => {
+  const { paths } = homeWithLibrary(t, 1);
+  const viaEnv = resolveDeployRoot({ env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: {} });
+  assert.deepEqual([viaEnv.origin, viaEnv.root, viaEnv.supersedes], ['merged-view', paths.mergedSkills, 'env']);
+  const viaConfig = resolveDeployRoot({ env: {}, paths, config: { vaultRoot: 'K' } });
+  assert.deepEqual([viaConfig.origin, viaConfig.root, viaConfig.supersedes], ['merged-view', paths.mergedSkills, 'config']);
+  const both = resolveDeployRoot({ env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: { vaultRoot: 'K' } });
+  assert.equal(both.supersedes, 'env', 'env is the one named when both are set, as it is the one that would have won');
+  const neither = resolveDeployRoot({ env: {}, paths, config: {} });
+  assert.deepEqual([neither.origin, neither.supersedes], ['merged-view', null]);
+  assert.deepEqual(viaEnv.warnings, []);
+});
+
+test('deploy root: --vault still wins and never reads the registry', (t) => {
+  const { paths } = homeWithLibrary(t, 1);
+  fs.writeFileSync(paths.reposJson, '{ not json');
+  const r = resolveDeployRoot({ cliVault: 'C', env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: {} });
+  assert.equal(r.origin, 'cli');
+});
+
+test('deploy root: an empty registry leaves the env var and config in charge', (t) => {
+  const { paths } = homeWithLibrary(t, 0);
+  assert.equal(resolveDeployRoot({ env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: {} }).origin, 'env');
+  assert.equal(resolveDeployRoot({ env: {}, paths, config: { vaultRoot: 'K' } }).origin, 'config');
+});
+
+test('deploy root: sources registered but no library built keeps env and config, and says to run repo sync', (t) => {
+  const { paths } = fakeHome(t);
+  fs.mkdirSync(paths.agentforgeDir, { recursive: true });
+  fs.writeFileSync(paths.reposJson, JSON.stringify({ repositories: [{ name: 'a', type: 'local', url_or_path: '/a' }] }));
+  const r = resolveDeployRoot({ env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: {} });
+  assert.equal(r.origin, 'env');
+  assert.equal(r.warnings.length, 1);
+  assert.match(r.warnings[0], /repo sync/);
+  assert.equal(resolveDeployRoot({ env: {}, paths, config: {} }).warnings.some((w) => /repo sync/.test(w) && /registered/.test(w)), true);
+});
+
+test('deploy root: a corrupt registry refuses unless --vault is given', (t) => {
+  const { paths } = homeWithLibrary(t, 1);
+  fs.writeFileSync(paths.reposJson, '{ not json');
+  assert.throws(() => resolveDeployRoot({ env: { AGENTFORGE_VAULT_ROOT: 'E' }, paths, config: {} }), { code: 'CONFIG_CORRUPT' });
+});
+
 test('primary source for sync can never be the merged view', (t) => {
   const { paths } = fakeHome(t);
   assert.throws(() => resolvePrimarySource({ cliVault: paths.mergedSkills, env: {}, paths }), { code: 'VIEW_AS_SOURCE' });

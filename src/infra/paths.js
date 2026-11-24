@@ -83,26 +83,45 @@ function atomicWrite(file, content) {
 
 // ─── vault / deploy root resolution ──────────────────────────────────────────
 
+/** Where a deploy root came from. The values are printed and asserted, so they are fixed. */
+const DEPLOY_ORIGIN = Object.freeze({ CLI: 'cli', ENV: 'env', CONFIG: 'config', MERGED_VIEW: 'merged-view', DEFAULT: 'default' });
+
+/** How many sources are registered; a missing registry is none, a corrupt one refuses (as repo sync does). */
+function registeredSources(paths) {
+  return fs.existsSync(paths.reposJson) ? loadRegistry(paths).repositories.length : 0;
+}
+
 /**
  * Root that init/link deploy from. Precedence:
  *   1. --vault
- *   2. AGENTFORGE_VAULT_ROOT
- *   3. config.json vaultRoot
- *   4. ~/.agentforge/merged-skills — only if a registry exists behind it
- *   5. ~/.agentforge/vault, with a warning that no vault is configured
- * Returns { root, origin, warnings[] }.
+ *   2. ~/.agentforge/merged-skills, when it is built and at least one source is registered. A vault set by
+ *      AGENTFORGE_VAULT_ROOT or config.json vaultRoot is then the primary source for "repo sync", not what projects
+ *      are wired to: wiring the vault alone would leave out every registered source's skills.
+ *   3. AGENTFORGE_VAULT_ROOT
+ *   4. config.json vaultRoot
+ *   5. ~/.agentforge/merged-skills — only if a registry exists behind it (an empty one)
+ *   6. ~/.agentforge/vault, with a warning that no vault is configured
+ * Returns { root, origin, supersedes, warnings[] }. `supersedes` is 'env' or 'config' when step 2 took over from a vault
+ * that either one named, otherwise null. A corrupt registry throws unless --vault is given.
  */
 function resolveDeployRoot({ cliVault, env = {}, paths, config = {} }) {
   const warnings = [];
-  if (cliVault) return { root: path.resolve(cliVault), origin: 'cli', warnings };
-  if (env.AGENTFORGE_VAULT_ROOT) return { root: env.AGENTFORGE_VAULT_ROOT, origin: 'env', warnings };
-  if (config.vaultRoot) return { root: config.vaultRoot, origin: 'config', warnings };
-  if (fs.existsSync(paths.mergedSkills)) {
-    if (fs.existsSync(paths.reposJson)) return { root: paths.mergedSkills, origin: 'merged-view', warnings };
+  if (cliVault) return { root: path.resolve(cliVault), origin: DEPLOY_ORIGIN.CLI, supersedes: null, warnings };
+  const sources = registeredSources(paths);
+  const viewBuilt = fs.existsSync(paths.mergedSkills);
+  if (sources > 0 && viewBuilt) {
+    const named = env.AGENTFORGE_VAULT_ROOT ? DEPLOY_ORIGIN.ENV : config.vaultRoot ? DEPLOY_ORIGIN.CONFIG : null;
+    return { root: paths.mergedSkills, origin: DEPLOY_ORIGIN.MERGED_VIEW, supersedes: named, warnings };
+  }
+  if (sources > 0) warnings.push(`${sources} source${sources === 1 ? ' is' : 's are'} registered but the library is not built, so projects get the vault alone. Run "agentforge repo sync" first.`);
+  if (env.AGENTFORGE_VAULT_ROOT) return { root: env.AGENTFORGE_VAULT_ROOT, origin: DEPLOY_ORIGIN.ENV, supersedes: null, warnings };
+  if (config.vaultRoot) return { root: config.vaultRoot, origin: DEPLOY_ORIGIN.CONFIG, supersedes: null, warnings };
+  if (viewBuilt) {
+    if (fs.existsSync(paths.reposJson)) return { root: paths.mergedSkills, origin: DEPLOY_ORIGIN.MERGED_VIEW, supersedes: null, warnings };
     warnings.push(`ignoring ${paths.mergedSkills}: no ${path.basename(paths.reposJson)} behind it (orphaned view). Run "agentforge repo sync" or delete it.`);
   }
   warnings.push(`no vault configured; using ${paths.defaultVaultRoot}. Set --vault, AGENTFORGE_VAULT_ROOT or "vaultRoot" in ${paths.configJson}.`);
-  return { root: paths.defaultVaultRoot, origin: 'default', warnings };
+  return { root: paths.defaultVaultRoot, origin: DEPLOY_ORIGIN.DEFAULT, supersedes: null, warnings };
 }
 
 /**
@@ -128,4 +147,5 @@ module.exports = {
   atomicWrite,
   resolveDeployRoot,
   resolvePrimarySource,
+  DEPLOY_ORIGIN,
 };

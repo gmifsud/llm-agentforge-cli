@@ -42,6 +42,24 @@ test('review: context validates merged-view links before probing their targets',
   assert.equal(probed, false);
 });
 
+test('review: with the env var set and no --vault, context still validates merged-view links before probing them', t => {
+  if (process.platform !== 'win32') return;
+  const f = fixture(t);
+  const probe = path.join(f.root, 'blocked');
+  const originalExists = fs.existsSync;
+  // The env var no longer lets the resolver skip the merged view: a registered source makes it the deploy root.
+  const service = new ReadService({ ...f.options, vault: undefined, env: { AGENTFORGE_VAULT_ROOT: f.vault } });
+  service.paths = { ...service.paths, mergedSkills: probe };
+  fs.symlinkSync('\\\\wsl.localhost\\UnopenedDistribution\\skills', probe, 'dir');
+  let probed = false;
+  t.mock.method(fs, 'existsSync', p => {
+    if (p === probe) { probed = true; return false; }
+    return originalExists(p);
+  });
+  assert.throws(() => service.context(), { status: 403 });
+  assert.equal(probed, false);
+});
+
 test('review: malformed source URI cannot leak a query credential through fallback', t => {
   const f = fixture(t);
   fs.writeFileSync(f.registry, JSON.stringify({ repositories: [{ name: 'cached', type: 'git', url_or_path: 'git@example.com:repo?token=private-value' }] }));

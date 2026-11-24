@@ -189,8 +189,9 @@ class ReadService {
       const config = loadConfig(this.paths);
       this.config = config;
       this.loadProjects();
-      // The core fallback probes this path with existsSync, which follows links.
-      if (!this.vault && !this.env.AGENTFORGE_VAULT_ROOT && !config.vaultRoot) {
+      // The core resolver probes this path with existsSync, which follows links. Only --vault skips that: with a source
+      // registered, the merged view is looked at even when the environment or config.json names a vault.
+      if (!this.vault) {
         localPath(this.paths.mergedSkills);
         contained(this.paths.homedir, this.paths.reposJson);
       }

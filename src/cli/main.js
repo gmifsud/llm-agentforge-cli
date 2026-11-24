@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { parseArgs } = require('./args');
@@ -55,8 +56,9 @@ PowerShell spelling is accepted too: -Path, -Target, -DryRun, -NoPreserve, -Vaul
 
 Exit codes: 0 ok · 1 failure · 2 usage · 3 refused (conflict or safety boundary; nothing applied)
 
-Vault root for init/link: --vault > AGENTFORGE_VAULT_ROOT > ~/.agentforge/config.json vaultRoot
-  > ~/.agentforge/merged-skills (only when repos.json exists) > ~/.agentforge/vault.
+Deploy root for init/link/doctor: --vault > ~/.agentforge/merged-skills (when built and a source is registered)
+  > AGENTFORGE_VAULT_ROOT > ~/.agentforge/config.json vaultRoot > ~/.agentforge/merged-skills (empty registry)
+  > ~/.agentforge/vault. The env var and vaultRoot still name the primary vault that "repo sync" merges.
 `;
 
 function createLogger(stream, { color }) {
@@ -136,11 +138,26 @@ function run(argv, {
 
 // ─── init / link ─────────────────────────────────────────────────────────────
 
+/** True for a folder, or a link to one. */
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+const SUPERSEDED_SETTING = { env: 'AGENTFORGE_VAULT_ROOT', config: '"vaultRoot" in config.json' };
+
+/** Said whenever the merged library took over from a vault that the environment or config.json names. */
+const supersededNotice = (setting) => `${SUPERSEDED_SETTING[setting]} is your primary vault for "repo sync"; projects are wired to the merged library because sources are registered. Pass --vault to wire the vault alone.`;
+
 function cmdProject(command, { paths, env, platform, cwd, opts, log, elog }) {
   const projectRoot = path.resolve(cwd, opts.path || '.');
+  // `init` starts a new project and may make its folder; `link` only changes a project that exists. A relative --path is
+  // read from where the command runs, so a typo or a repeated folder name would otherwise make stray folders.
+  if (command === 'link' ? !isDirectory(projectRoot) : fs.existsSync(projectRoot) && !isDirectory(projectRoot)) {
+    throw usage(`--path ${projectRoot} is not an existing folder. Give a folder that exists (use . for the current one); nothing was created.`);
+  }
   const config = loadConfig(paths);
-  const { root: vaultRoot, origin, warnings } = opts.set
-    ? { root: sets.viewForLink(paths, opts.set), origin: `set ${opts.set}`, warnings: [] }
+  const { root: vaultRoot, origin, supersedes, warnings } = opts.set
+    ? { root: sets.viewForLink(paths, opts.set), origin: `set ${opts.set}`, supersedes: null, warnings: [] }
     : resolveDeployRoot({ cliVault: opts.vault, env, paths, config });
   const preserve = opts.noPreserve ? false : true;
   const dryRun = Boolean(opts.dryRun);
@@ -153,6 +170,7 @@ function cmdProject(command, { paths, env, platform, cwd, opts, log, elog }) {
   log.info(`Link    : ${opts.link || 'auto'}   Preserve: ${preserve ? 'on' : 'off'}   Force: ${opts.force ? 'on' : 'off'}`);
   if (dryRun) log.warn('Mode    : DRY RUN — nothing will be written');
   for (const w of warnings) log.warn(w);
+  if (supersedes) log.grey(supersededNotice(supersedes));
   log.raw('');
 
   const plans = planProject({
@@ -184,9 +202,10 @@ function cmdProject(command, { paths, env, platform, cwd, opts, log, elog }) {
 function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
   const projectRoot = path.resolve(cwd, opts.path || '.');
   const config = loadConfig(paths);
-  const { root: vaultRoot, origin, warnings } = resolveDeployRoot({ cliVault: opts.vault, env, paths, config });
+  const { root: vaultRoot, origin, supersedes, warnings } = resolveDeployRoot({ cliVault: opts.vault, env, paths, config });
   const report = inspectProject({ projectRoot, vaultRoot });
   report.vaultOrigin = origin;
+  report.vaultSupersedes = supersedes;
   report.warnings = warnings;
   for (const t of report.targets) t.reads = t.link.kind === 'link' ? sets.readsOf(paths, t.link.resolvedTarget) : { kind: 'other' };
   report.library = report.vault.ok ? inspectLibrary({ root: vaultRoot, homedir: paths.homedir, config }) : null;
@@ -198,6 +217,7 @@ function cmdDoctor({ paths, env, cwd, opts, log, elog, stdout }) {
   log.info(`Vault   : ${vaultRoot} (${origin})`);
   if (report.vault.physical.toLowerCase() !== path.resolve(vaultRoot).toLowerCase()) log.grey(`↳ resolves to ${report.vault.physical}`);
   for (const w of warnings) log.warn(w);
+  if (supersedes) log.grey(supersededNotice(supersedes));
   log.raw('');
   if (report.vault.ok) {
     const extra = report.vault.viewLinks !== undefined ? `, ${report.vault.viewLinks} of them through links` : '';

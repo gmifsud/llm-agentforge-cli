@@ -333,12 +333,15 @@ PowerShell spelling works everywhere: `-Path`, `-Target`, `-DryRun`, `-NoPreserv
 **Which vault does a command use?** First match wins:
 
 1. `--vault`
-2. `AGENTFORGE_VAULT_ROOT`
-3. `vaultRoot` in `~/.agentforge/config.json`
-4. `~/.agentforge/merged-skills`, but only if `repos.json` exists beside it. A view with no registry is ignored with a warning; it is a leftover, not a source.
-5. The built-in default.
+2. `~/.agentforge/merged-skills`, when it is built and at least one source is registered. Your projects then receive the skills of every registered source, not only your vault's. If `AGENTFORGE_VAULT_ROOT` or `vaultRoot` is set, `init`, `link` and `doctor` print a line saying it is your primary vault for `repo sync` and that the library was used instead. Pass `--vault` to wire the vault alone.
+3. `AGENTFORGE_VAULT_ROOT`
+4. `vaultRoot` in `~/.agentforge/config.json`
+5. `~/.agentforge/merged-skills`, but only if `repos.json` exists beside it and has no sources. A view with no registry is ignored with a warning; it is a leftover, not a source.
+6. The built-in default.
 
-`repo sync` uses the same chain for the *primary source* except step 4: the view is never allowed as a source.
+`repo sync` chooses the *primary source* with `--vault`, then `AGENTFORGE_VAULT_ROOT`, then `vaultRoot`, then the default: the view is never allowed as a source.
+
+A project that is already linked to the vault is not repointed by this change. `link` stops with exit 3 and names `--force`, which removes the link only (never the vault). A corrupt `repos.json` stops `init`, `link` and `doctor` unless you pass `--vault`.
 
 **Link types.** `auto` picks junction on Windows (no admin rights needed) and symlink elsewhere. `copy` copies the whole view into the project (use when a tool cannot follow links). `none` does nothing at all, even with `--force`.
 
